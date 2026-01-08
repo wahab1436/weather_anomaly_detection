@@ -797,18 +797,36 @@ class WeatherAnomalyDashboard:
                     pip install -r requirements.txt
                     ```
                     
-                    2. **Run the complete pipeline:**
+                    2. **Create required directories:**
                     ```bash
-                    python run_dashboard.py --mode pipeline
+                    python -c "import os; [os.makedirs(d, exist_ok=True) for d in ['data/raw','data/processed','data/output','models','logs']]"
                     ```
                     
-                    3. **Start the dashboard:**
+                    3. **Run the complete pipeline (scrapes + processes + ML):**
                     ```bash
-                    python run_dashboard.py --mode dashboard
+                    python run_dashboard.py --pipeline
                     ```
                     
-                    4. **Schedule hourly scraping (optional):**
+                    4. **Start the dashboard:**
                     ```bash
+                    python run_dashboard.py --dashboard
+                    ```
+                    
+                    **Alternative individual steps:**
+                    ```bash
+                    # Just scrape data
+                    python run_dashboard.py --scrape
+                    
+                    # Just process data  
+                    python run_dashboard.py --process
+                    
+                    # Just run anomaly detection
+                    python run_dashboard.py --anomaly
+                    
+                    # Just run forecasting
+                    python run_dashboard.py --forecast
+                    
+                    # Schedule hourly scraping
                     python run_dashboard.py --schedule
                     ```
                 """)
