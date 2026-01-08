@@ -1,146 +1,172 @@
-#!/usr/bin/env python3
 """
-Streamlit Cloud Entry Point for Weather Anomaly Detection Dashboard
+Streamlit App for Weather Anomaly Detection Dashboard
+Minimal version for Streamlit Cloud
 """
-import os
-import sys
 import streamlit as st
-from pathlib import Path
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+from datetime import datetime, timedelta
+import os
+from pathlib import Path
 
-# Set page config first
+# Create directories
+for dir_path in ['data/raw', 'data/processed', 'data/output', 'models', 'logs']:
+    Path(dir_path).mkdir(parents=True, exist_ok=True)
+
+# Simple configuration
+class Config:
+    PROCESSED_DATA_PATH = "data/processed/weather_alerts_processed.csv"
+    ANOMALY_OUTPUT_PATH = "data/output/anomaly_results.csv"
+    FORECAST_OUTPUT_PATH = "data/output/forecast_results.csv"
+    DASHBOARD_PORT = 8501
+
+# Set page config
 st.set_page_config(
     page_title="Weather Anomaly Detection Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Create all required directories
-def setup_project():
-    """Setup the project structure"""
-    directories = [
-        'data/raw',
-        'data/processed',
-        'data/output',
-        'models',
-        'logs'
-    ]
-    
-    for directory in directories:
-        Path(directory).mkdir(parents=True, exist_ok=True)
-    
-    # Create empty data files if they don't exist
-    from config import Config
-    
-    # Create empty CSV files with headers if they don't exist
-    sample_data = {
-        'timestamp': [],
-        'title': [],
-        'description': [],
-        'region': [],
-        'alert_type': [],
-        'severity': [],
-        'source': []
-    }
-    
-    if not os.path.exists(Config.RAW_DATA_PATH):
-        pd.DataFrame(sample_data).to_csv(Config.RAW_DATA_PATH, index=False)
-    
-    if not os.path.exists(Config.PROCESSED_DATA_PATH):
-        pd.DataFrame(sample_data).to_csv(Config.PROCESSED_DATA_PATH, index=False)
-    
-    if not os.path.exists(Config.ANOMALY_OUTPUT_PATH):
-        pd.DataFrame({'date': [], 'total_alerts': [], 'is_anomaly': []}).to_csv(Config.ANOMALY_OUTPUT_PATH, index=False)
-    
-    if not os.path.exists(Config.FORECAST_OUTPUT_PATH):
-        pd.DataFrame({'date': [], 'forecast': []}).to_csv(Config.FORECAST_OUTPUT_PATH, index=False)
-    
-    return True
+# Dashboard title
+st.title("Weather Anomaly Detection Dashboard")
+st.markdown("Real-time monitoring and forecasting of weather alert anomalies")
 
-# Try to setup project
-try:
-    setup_project()
-except:
-    pass  # Ignore errors in setup
+# Check if data exists
+data_exists = (
+    os.path.exists(Config.PROCESSED_DATA_PATH) and
+    os.path.exists(Config.ANOMALY_OUTPUT_PATH) and
+    os.path.exists(Config.FORECAST_OUTPUT_PATH)
+)
 
-# Add project root to Python path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
-
-# Check if we can import the dashboard
-def check_dependencies():
-    """Check if all required modules can be imported"""
+if not data_exists:
+    st.warning("No data found. Running in demo mode with sample data.")
+    
+    # Generate sample data for demo
+    dates = pd.date_range(start='2024-01-01', end='2024-01-31', freq='D')
+    sample_alerts = pd.DataFrame({
+        'timestamp': dates,
+        'title': ['Weather Alert'] * len(dates),
+        'description': ['Sample alert description'] * len(dates),
+        'region': ['Northeast', 'Southeast', 'Midwest', 'West'] * (len(dates)//4),
+        'alert_type': ['storm', 'flood', 'fire', 'wind'] * (len(dates)//4),
+        'severity': ['warning', 'watch', 'advisory'] * (len(dates)//3)
+    })
+    
+    sample_anomalies = pd.DataFrame({
+        'date': dates,
+        'total_alerts': np.random.randint(5, 50, size=len(dates)),
+        'is_anomaly': np.random.choice([True, False], size=len(dates), p=[0.1, 0.9]),
+        'anomaly_score': np.random.randn(len(dates))
+    })
+    sample_anomalies.set_index('date', inplace=True)
+    
+    sample_forecast = pd.DataFrame({
+        'date': pd.date_range(start='2024-02-01', end='2024-02-07', freq='D'),
+        'forecast': np.random.randint(10, 40, size=7),
+        'lower_bound': np.random.randint(5, 30, size=7),
+        'upper_bound': np.random.randint(15, 50, size=7)
+    })
+    
+    df_alerts = sample_alerts
+    df_anomalies = sample_anomalies
+    df_forecast = sample_forecast
+    
+    st.info("Displaying sample data. Run the pipeline for real weather alerts.")
+else:
+    # Load real data
     try:
-        # Try to import key modules
-        import pandas
-        import numpy
-        import plotly
-        import sklearn
-        import xgboost
-        import streamlit
-        return True
-    except ImportError as e:
-        return False
-
-# Main app logic
-def main():
-    """Main application function"""
-    
-    # Check dependencies first
-    if not check_dependencies():
-        st.error("Missing dependencies. Please install requirements.txt")
-        st.code("pip install -r requirements.txt")
-        return
-    
-    # Try to import and run the dashboard
-    try:
-        from src.dashboard.app import main as run_dashboard
-        run_dashboard()
-    except ImportError as e:
-        st.error(f"Import error: {str(e)}")
+        df_alerts = pd.read_csv(Config.PROCESSED_DATA_PATH)
+        df_anomalies = pd.read_csv(Config.ANOMALY_OUTPUT_PATH, index_col=0)
+        df_forecast = pd.read_csv(Config.FORECAST_OUTPUT_PATH)
         
-        # Show setup instructions
-        st.markdown("""
-        ## Setup Instructions
-        
-        This app requires the complete project structure. Please ensure:
-        
-        1. **All project files are uploaded** including:
-           - `src/` directory with all modules
-           - `config.py` file
-           - `requirements.txt` file
-        
-        2. **For local testing**, run:
-        ```bash
-        pip install -r requirements.txt
-        python run_dashboard.py --pipeline
-        python run_dashboard.py --dashboard
-        ```
-        
-        3. **The project structure should be:**
-        ```
-        weather_anomaly_dashboard/
-        ├── streamlit_app.py          (this file)
-        ├── requirements.txt
-        ├── config.py
-        ├── run_dashboard.py
-        ├── src/
-        │   ├── __init__.py
-        │   ├── scraping/
-        │   ├── preprocessing/
-        │   ├── ml/
-        │   ├── utils/
-        │   └── dashboard/
-        ├── data/
-        ├── models/
-        └── logs/
-        ```
-        """)
+        # Convert dates
+        if 'timestamp' in df_alerts.columns:
+            df_alerts['timestamp'] = pd.to_datetime(df_alerts['timestamp'])
+        if df_anomalies.index.name == 'date':
+            df_anomalies.index = pd.to_datetime(df_anomalies.index)
+        if 'date' in df_forecast.columns:
+            df_forecast['date'] = pd.to_datetime(df_forecast['date'])
+            
     except Exception as e:
-        st.error(f"Application error: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
+        st.error(f"Error loading data: {str(e)}")
+        st.stop()
 
-if __name__ == "__main__":
-    main()
+# Display metrics
+st.subheader("Summary Metrics")
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric("Total Alerts", len(df_alerts))
+
+with col2:
+    if 'timestamp' in df_alerts.columns:
+        recent = df_alerts[df_alerts['timestamp'] > (datetime.now() - timedelta(days=7))]
+        st.metric("7-Day Alerts", len(recent))
+
+with col3:
+    if 'is_anomaly' in df_anomalies.columns:
+        st.metric("Anomalies", df_anomalies['is_anomaly'].sum())
+
+with col4:
+    if 'forecast' in df_forecast.columns:
+        st.metric("Forecast Avg", f"{df_forecast['forecast'].mean():.1f}")
+
+st.markdown("---")
+
+# Alert trend chart
+st.subheader("Alert Trends")
+if 'total_alerts' in df_anomalies.columns:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df_anomalies.index,
+        y=df_anomalies['total_alerts'],
+        mode='lines',
+        name='Daily Alerts'
+    ))
+    
+    # Add anomalies if present
+    if 'is_anomaly' in df_anomalies.columns:
+        anomalies = df_anomalies[df_anomalies['is_anomaly']]
+        if not anomalies.empty:
+            fig.add_trace(go.Scatter(
+                x=anomalies.index,
+                y=anomalies['total_alerts'],
+                mode='markers',
+                name='Anomalies',
+                marker=dict(color='red', size=10)
+            ))
+    
+    # Add forecast if available
+    if not df_forecast.empty and 'date' in df_forecast.columns:
+        fig.add_trace(go.Scatter(
+            x=df_forecast['date'],
+            y=df_forecast['forecast'],
+            mode='lines',
+            name='Forecast',
+            line=dict(dash='dash')
+        ))
+    
+    fig.update_layout(height=400)
+    st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("---")
+
+# Alert type distribution
+if 'alert_type' in df_alerts.columns:
+    st.subheader("Alert Type Distribution")
+    alert_counts = df_alerts['alert_type'].value_counts()
+    fig = px.bar(
+        x=alert_counts.index,
+        y=alert_counts.values,
+        labels={'x': 'Alert Type', 'y': 'Count'}
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# Footer
+st.markdown("---")
+st.markdown("""
+**Data Source**: National Weather Service (weather.gov)  
+**Update Frequency**: Hourly  
+**Dashboard Version**: 1.0.0
+""")
