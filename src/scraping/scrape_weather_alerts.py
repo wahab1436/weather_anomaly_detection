@@ -19,16 +19,36 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from config import Config
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/scraping.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# Configure logging - CREATE LOGS DIRECTORY FIRST
+def setup_scraping_logger():
+    """Setup logging for scraping module"""
+    logs_dir = 'logs'
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    
+    # Remove existing handlers to avoid duplicates
+    if logger.handlers:
+        logger.handlers.clear()
+    
+    # Create formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # File handler
+    file_handler = logging.FileHandler(f'{logs_dir}/scraping.log')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+# Setup logger
+logger = setup_scraping_logger()
 
 class WeatherAlertScraper:
     """Scrape weather alerts from official sources"""
@@ -377,7 +397,6 @@ class WeatherAlertScraper:
 def schedule_scraping():
     """Schedule the scraping job to run hourly"""
     from schedule import every, repeat, run_pending
-    import time
     
     scraper = WeatherAlertScraper()
     
@@ -400,7 +419,7 @@ def schedule_scraping():
             time.sleep(300)  # Wait 5 minutes on error
 
 if __name__ == "__main__":
-    # Create logs directory
+    # Create logs directory if not exists
     os.makedirs('logs', exist_ok=True)
     
     # Run once for immediate execution
