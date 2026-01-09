@@ -510,6 +510,11 @@ class WeatherAnomalySystem:
 # Run dashboard
 # -------------------------------
 if __name__ == "__main__":
+    # Create necessary directories
     os.makedirs("data/raw", exist_ok=True)
     os.makedirs("data/processed", exist_ok=True)
-    os.makedirs("data/output", exist
+    os.makedirs("data/output", exist_ok=True)
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("logs", exist_ok=True)
+    
+    main()
