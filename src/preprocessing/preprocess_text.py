@@ -340,7 +340,6 @@ def preprocess_pipeline(input_path: str, output_path: str):
         # Save processed data
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
-        # Save individual alerts
         processed_output_path = output_path.replace('.csv', '_processed.csv')
         processed_df.to_csv(processed_output_path, index=False)
         
@@ -352,11 +351,16 @@ def preprocess_pipeline(input_path: str, output_path: str):
         dashboard_output = "data/output/dashboard_data.csv"
         daily_stats.to_csv(dashboard_output, index=False)
         
+        # ALSO SAVE WITH THE EXPECTED NAME FOR ML PIPELINES
+        expected_daily_path = "data/processed/weather_alerts_daily.csv"
+        daily_stats.to_csv(expected_daily_path, index=False)
+        
         logger.info(f"Preprocessing complete. Saved to {processed_output_path} and {daily_output_path}")
         
     except Exception as e:
         logger.error(f"Preprocessing pipeline failed: {str(e)}")
         raise
+
 
 if __name__ == "__main__":
     # Example usage
