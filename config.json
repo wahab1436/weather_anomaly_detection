@@ -1,0 +1,35 @@
+{
+  "scraping_interval_hours": 1,
+  "processing_interval_hours": 1,
+  "ml_interval_hours": 6,
+  "max_days_to_keep": 90,
+  "anomaly_contamination": 0.1,
+  "forecast_horizon_days": 7,
+  "enable_dashboard": true,
+  "dashboard_port": 8501,
+  "log_level": "INFO",
+  "data_retention_days": 30,
+  "alert_types": [
+    "flood",
+    "storm",
+    "wind",
+    "winter",
+    "fire",
+    "heat",
+    "cold",
+    "coastal",
+    "air",
+    "other"
+  ],
+  "regions_of_interest": [
+    "National",
+    "Regional",
+    "State",
+    "County"
+  ],
+  "performance_thresholds": {
+    "anomaly_confidence_high": 0.7,
+    "forecast_accuracy_target": 0.8,
+    "data_freshness_hours": 24
+  }
+}
