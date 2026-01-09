@@ -14,10 +14,10 @@ import json
 from typing import Dict, List, Optional
 import logging
 
-# Configure page
+# Configure page - NO EMOJI
 st.set_page_config(
     page_title="Weather Anomaly Detection Dashboard",
-    page_icon="⛈️",
+    page_icon=None,  # No emoji
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -354,27 +354,10 @@ def create_region_map(alerts: pd.DataFrame) -> go.Figure:
     region_counts = alerts['region'].value_counts().reset_index()
     region_counts.columns = ['region', 'count']
     
-    # Simplified region to state mapping (in production, use proper geocoding)
-    state_abbr = {
-        'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
-        'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware',
-        'FL': 'Florida', 'GA': 'Georgia', 'HI': 'Hawaii', 'ID': 'Idaho',
-        'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa', 'KS': 'Kansas',
-        'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland',
-        'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi',
-        'MO': 'Missouri', 'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada',
-        'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico', 'NY': 'New York',
-        'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio', 'OK': 'Oklahoma',
-        'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina',
-        'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah',
-        'VT': 'Vermont', 'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia',
-        'WI': 'Wisconsin', 'WY': 'Wyoming'
-    }
-    
     # Create choropleth map
     fig = go.Figure(data=go.Choropleth(
-        locations=list(state_abbr.keys()),
-        z=[10] * len(state_abbr),  # Placeholder values
+        locations=['US'],  # Simplified
+        z=[10],  # Placeholder
         locationmode='USA-states',
         colorscale='Blues',
         showscale=False
@@ -557,6 +540,9 @@ def display_recent_alerts(alerts: pd.DataFrame) -> None:
 
 def main():
     """Main dashboard application."""
+    # Load data FIRST - THIS IS THE CRITICAL FIX
+    data = load_data()
+    
     # Header
     st.markdown('<h1 class="main-header">Weather Anomaly Detection Dashboard</h1>', unsafe_allow_html=True)
     
@@ -627,9 +613,9 @@ def main():
             default=severity_levels
         )
         
-        # Refresh button
+        # Refresh button - NO EMOJI
         st.markdown("---")
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         
@@ -997,15 +983,15 @@ def main():
                 
                 st.plotly_chart(fig_sentiment, use_container_width=True)
     
-    # Footer
+    # Footer - NO EMOJI
     st.markdown("---")
-    st.markdown("""
+    st.markdown(f"""
     <div style="text-align: center; color: #6B7280; font-size: 0.875rem;">
         <p>Weather Anomaly Detection Dashboard v1.0 | Production System</p>
         <p>Data Source: National Weather Service (weather.gov)</p>
-        <p>Updates Hourly | Last Scrape: {}
+        <p>Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
     </div>
-    """.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')), unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     # Create necessary directories
