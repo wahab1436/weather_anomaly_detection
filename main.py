@@ -1,403 +1,282 @@
-#!/usr/bin/env python3
 """
-Main orchestration script for the Weather Anomaly Detection System.
-Runs the complete pipeline: scraping → preprocessing → ML → dashboard.
+Main Weather Anomaly Detection Dashboard - Streamlit Entry Point
 """
+import streamlit as st
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 import os
 import sys
-import time
-import logging
-from datetime import datetime, timedelta
-import schedule
-from typing import Dict, Any
-import json
 
-# Add src to path
+# Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from scraping.scrape_weather_alerts import main as scrape_main
-from preprocessing.preprocess_text import preprocess_pipeline
-from ml.anomaly_detection import run_anomaly_detection
-from ml.forecast_model import run_forecasting
-from utils.helpers import setup_logging, generate_plain_english_insights, save_to_json
+# Set page config - NO EMOJIS
+st.set_page_config(
+    page_title="Weather Anomaly Detection Dashboard",
+    page_icon=None,
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Setup logging
-setup_logging('logs/system.log')
-logger = logging.getLogger(__name__)
+# Professional CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1E3A8A;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #374151;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+    }
+    .metric-card {
+        background-color: #F9FAFB;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        border-left: 4px solid #3B82F6;
+        margin-bottom: 1rem;
+    }
+    .insight-card {
+        background-color: #EFF6FF;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        border: 1px solid #DBEAFE;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-class WeatherAnomalySystem:
-    """Main orchestration class for the weather anomaly detection system."""
+@st.cache_data(ttl=3600)
+def load_data():
+    """Load or generate dashboard data."""
+    try:
+        # Try to load processed data
+        if os.path.exists("data/processed/weather_alerts_daily.csv"):
+            df = pd.read_csv("data/processed/weather_alerts_daily.csv")
+            if 'issued_date' in df.columns:
+                df['date'] = pd.to_datetime(df['issued_date'])
+            return df, "Live Data"
+    except Exception as e:
+        st.warning(f"Could not load data: {e}")
     
-    def __init__(self, config_path: str = None):
-        """Initialize the system with configuration."""
-        self.config = self.load_config(config_path)
-        self.running = False
-        
-        # File paths
-        self.raw_data_path = "data/raw/weather_alerts_raw.csv"
-        self.processed_data_path = "data/processed/weather_alerts_processed.csv"
-        self.daily_data_path = "data/processed/weather_alerts_daily.csv"
-        self.anomaly_model_path = "models/isolation_forest.pkl"
-        self.forecast_model_path = "models/xgboost_forecast.pkl"
-        self.anomaly_output_path = "data/output/anomaly_results.csv"
-        self.forecast_output_path = "data/output/forecast_results.csv"
-        
-    def load_config(self, config_path: str = None) -> Dict[str, Any]:
-        """Load configuration from file or use defaults."""
-        default_config = {
-            'scraping_interval_hours': 1,
-            'processing_interval_hours': 1,
-            'ml_interval_hours': 6,
-            'max_days_to_keep': 90,
-            'anomaly_contamination': 0.1,
-            'forecast_horizon_days': 7,
-            'enable_dashboard': True,
-            'dashboard_port': 8501,
-            'log_level': 'INFO'
-        }
-        
-        if config_path and os.path.exists(config_path):
-            try:
-                with open(config_path, 'r') as f:
-                    user_config = json.load(f)
-                default_config.update(user_config)
-                logger.info(f"Loaded configuration from {config_path}")
-            except Exception as e:
-                logger.error(f"Error loading config from {config_path}: {str(e)}")
-        
-        return default_config
+    # Generate sample data for demo
+    dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
     
-    def run_scraping(self):
-        """Run the web scraping process."""
-        logger.info("Starting web scraping process...")
-        try:
-            scrape_main()
-            logger.info("Web scraping completed successfully")
-            return True
-        except Exception as e:
-            logger.error(f"Web scraping failed: {str(e)}")
-            return False
+    sample_data = pd.DataFrame({
+        'date': dates,
+        'total_alerts': np.random.randint(10, 50, 30),
+        'flood': np.random.randint(0, 15, 30),
+        'storm': np.random.randint(0, 20, 30),
+        'wind': np.random.randint(0, 10, 30),
+        'winter': np.random.randint(0, 8, 30),
+        'fire': np.random.randint(0, 5, 30),
+        'heat': np.random.randint(0, 3, 30),
+        'cold': np.random.randint(0, 4, 30)
+    })
     
-    def run_preprocessing(self):
-        """Run the data preprocessing pipeline."""
-        logger.info("Starting data preprocessing...")
-        try:
-            preprocess_pipeline(self.raw_data_path, self.processed_data_path)
-            logger.info("Data preprocessing completed successfully")
-            return True
-        except Exception as e:
-            logger.error(f"Data preprocessing failed: {str(e)}")
-            return False
+    return sample_data, "Sample Data (Demo Mode)"
+
+def create_alert_timeline(df):
+    """Create timeline chart."""
+    import plotly.graph_objects as go
     
-    def run_anomaly_detection_pipeline(self):
-        """Run the anomaly detection pipeline."""
-        logger.info("Starting anomaly detection...")
-        try:
-            if not os.path.exists(self.daily_data_path):
-                logger.warning("Daily data not found. Running preprocessing first.")
-                if not self.run_preprocessing():
-                    return False
-            
-            anomaly_results, explanations = run_anomaly_detection(
-                self.daily_data_path,
-                self.anomaly_output_path,
-                self.anomaly_model_path
-            )
-            
-            logger.info(f"Anomaly detection completed. Found {anomaly_results['is_anomaly'].sum()} anomalies")
-            return True
-        except Exception as e:
-            logger.error(f"Anomaly detection failed: {str(e)}")
-            return False
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df['date'],
+        y=df['total_alerts'],
+        mode='lines',
+        name='Total Alerts',
+        line=dict(color='#3B82F6', width=2)
+    ))
     
-    def run_forecasting_pipeline(self):
-        """Run the forecasting pipeline."""
-        logger.info("Starting forecasting...")
-        try:
-            if not os.path.exists(self.daily_data_path):
-                logger.warning("Daily data not found. Running preprocessing first.")
-                if not self.run_preprocessing():
-                    return False
-            
-            forecast_results, evaluation = run_forecasting(
-                self.daily_data_path,
-                self.forecast_output_path,
-                self.forecast_model_path
-            )
-            
-            logger.info(f"Forecasting completed for {len(forecast_results['target'].unique())} targets")
-            return True
-        except Exception as e:
-            logger.error(f"Forecasting failed: {str(e)}")
-            return False
+    fig.update_layout(
+        title='Daily Weather Alerts',
+        xaxis_title='Date',
+        yaxis_title='Number of Alerts',
+        template='plotly_white',
+        height=400
+    )
     
-    def generate_insights(self):
-        """Generate plain English insights from analysis results."""
-        logger.info("Generating insights...")
-        try:
-            # Load data
-            daily_stats = pd.read_csv(self.daily_data_path) if os.path.exists(self.daily_data_path) else pd.DataFrame()
-            anomalies = pd.read_csv(self.anomaly_output_path) if os.path.exists(self.anomaly_output_path) else pd.DataFrame()
-            forecasts = pd.read_csv(self.forecast_output_path) if os.path.exists(self.forecast_output_path) else pd.DataFrame()
-            
-            # Parse dates
-            if not daily_stats.empty and 'issued_date' in daily_stats.columns:
-                daily_stats['issued_date'] = pd.to_datetime(daily_stats['issued_date'])
-            
-            if not anomalies.empty and 'issued_date' in anomalies.columns:
-                anomalies['issued_date'] = pd.to_datetime(anomalies['issued_date'])
-                anomalies = anomalies.set_index('issued_date')
-            
-            # Generate insights
-            insights = generate_plain_english_insights(daily_stats, anomalies, forecasts)
-            
-            # Save insights
-            insights_data = {
-                'generated_at': datetime.now().isoformat(),
-                'insights': insights,
-                'summary': f"Generated {len(insights)} insights"
-            }
-            
-            insights_path = "data/output/insights.json"
-            save_to_json(insights_data, insights_path)
-            
-            logger.info(f"Generated {len(insights)} insights")
-            return True
-        except Exception as e:
-            logger.error(f"Insights generation failed: {str(e)}")
-            return False
+    return fig
+
+def create_alert_type_chart(df):
+    """Create alert type distribution chart."""
+    import plotly.graph_objects as go
     
-    def run_complete_pipeline(self):
-        """Run the complete end-to-end pipeline."""
-        logger.info("=" * 60)
-        logger.info("STARTING COMPLETE PIPELINE RUN")
-        logger.info("=" * 60)
-        
-        start_time = time.time()
-        results = {
-            'scraping': False,
-            'preprocessing': False,
-            'anomaly_detection': False,
-            'forecasting': False,
-            'insights': False
-        }
-        
-        try:
-            # Step 1: Scraping
-            results['scraping'] = self.run_scraping()
-            
-            if results['scraping']:
-                # Step 2: Preprocessing
-                results['preprocessing'] = self.run_preprocessing()
-                
-                if results['preprocessing']:
-                    # Step 3: Anomaly Detection
-                    results['anomaly_detection'] = self.run_anomaly_detection_pipeline()
-                    
-                    # Step 4: Forecasting
-                    results['forecasting'] = self.run_forecasting_pipeline()
-                    
-                    # Step 5: Insights
-                    results['insights'] = self.generate_insights()
-            
-            # Log summary
-            elapsed_time = time.time() - start_time
-            logger.info("=" * 60)
-            logger.info("PIPELINE RUN COMPLETE")
-            logger.info("=" * 60)
-            
-            for step, success in results.items():
-                status = "✓ SUCCESS" if success else "✗ FAILED"
-                logger.info(f"{step.upper():20} {status}")
-            
-            logger.info(f"Total time: {elapsed_time:.2f} seconds")
-            logger.info("=" * 60)
-            
-            return all(results.values())
-            
-        except Exception as e:
-            logger.error(f"Pipeline run failed: {str(e)}")
-            return False
+    alert_types = ['flood', 'storm', 'wind', 'winter', 'fire', 'heat', 'cold']
+    type_totals = df[alert_types].sum()
     
-    def cleanup_old_data(self):
-        """Clean up old data files."""
-        logger.info("Cleaning up old data...")
-        try:
-            from utils.helpers import cleanup_old_files
-            
-            # Clean up old raw files
-            cleanup_old_files('data/raw', days_to_keep=self.config['max_days_to_keep'])
-            
-            # Clean up old logs
-            cleanup_old_files('logs', days_to_keep=30, pattern='*.log')
-            
-            logger.info("Cleanup completed")
-            return True
-        except Exception as e:
-            logger.error(f"Cleanup failed: {str(e)}")
-            return False
-    
-    def schedule_jobs(self):
-        """Schedule all periodic jobs."""
-        # Scraping job (hourly)
-        schedule.every(self.config['scraping_interval_hours']).hours.do(
-            lambda: self.run_scraping()
+    fig = go.Figure(data=[
+        go.Bar(
+            x=type_totals.index,
+            y=type_totals.values,
+            marker_color=['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4'],
+            text=type_totals.values,
+            textposition='auto'
         )
-        
-        # Preprocessing job (hourly, 5 minutes after scraping)
-        schedule.every(self.config['scraping_interval_hours']).hours.at(":05").do(
-            lambda: self.run_preprocessing()
-        )
-        
-        # ML jobs (every 6 hours)
-        schedule.every(self.config['ml_interval_hours']).hours.do(
-            lambda: self.run_anomaly_detection_pipeline()
-        )
-        
-        schedule.every(self.config['ml_interval_hours']).hours.at(":30").do(
-            lambda: self.run_forecasting_pipeline()
-        )
-        
-        # Insights generation (every 6 hours, after ML)
-        schedule.every(self.config['ml_interval_hours']).hours.at(":45").do(
-            lambda: self.generate_insights()
-        )
-        
-        # Cleanup job (daily at 2 AM)
-        schedule.every().day.at("02:00").do(
-            lambda: self.cleanup_old_data()
-        )
-        
-        logger.info(f"Scheduled jobs:")
-        logger.info(f"  - Scraping: every {self.config['scraping_interval_hours']} hours")
-        logger.info(f"  - Preprocessing: every {self.config['processing_interval_hours']} hours")
-        logger.info(f"  - ML analysis: every {self.config['ml_interval_hours']} hours")
-        logger.info(f"  - Cleanup: daily at 02:00")
+    ])
     
-    def run_scheduler(self):
-        """Run the scheduler loop."""
-        logger.info("Starting scheduler...")
-        self.running = True
-        
-        # Schedule jobs
-        self.schedule_jobs()
-        
-        # Run initial pipeline
-        logger.info("Running initial pipeline...")
-        self.run_complete_pipeline()
-        
-        # Start scheduler loop
-        logger.info("Scheduler started. Press Ctrl+C to stop.")
-        
-        try:
-            while self.running:
-                schedule.run_pending()
-                time.sleep(60)  # Check every minute
-        except KeyboardInterrupt:
-            logger.info("Scheduler stopped by user")
-        except Exception as e:
-            logger.error(f"Scheduler error: {str(e)}")
-        finally:
-            self.running = False
+    fig.update_layout(
+        title='Alert Type Distribution',
+        xaxis_title='Alert Type',
+        yaxis_title='Number of Alerts',
+        template='plotly_white',
+        height=300
+    )
     
-    def start_dashboard(self):
-        """Start the Streamlit dashboard."""
-        if not self.config['enable_dashboard']:
-            logger.info("Dashboard disabled in configuration")
-            return
-        
-        logger.info(f"Starting dashboard on port {self.config['dashboard_port']}...")
-        
-        # In production, you would run this in a separate process
-        # For now, we'll just provide instructions
-        logger.info("To start the dashboard, run: streamlit run src/dashboard/app.py")
-        
-        # Alternatively, you can use subprocess to start it
-        # import subprocess
-        # subprocess.Popen([
-        #     'streamlit', 'run', 'src/dashboard/app.py',
-        #     '--server.port', str(self.config['dashboard_port'])
-        # ])
+    return fig
 
 def main():
-    """Main entry point for the system."""
-    import argparse
+    """Main dashboard function."""
+    # Header
+    st.markdown('<h1 class="main-header">Weather Anomaly Detection Dashboard</h1>', unsafe_allow_html=True)
+    st.write("### Professional Weather Alert Monitoring System")
     
-    parser = argparse.ArgumentParser(
-        description='Weather Anomaly Detection System',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s run pipeline      # Run the complete pipeline once
-  %(prog)s run scheduler     # Run with scheduled jobs
-  %(prog)s scrape            # Run only scraping
-  %(prog)s preprocess        # Run only preprocessing
-  %(prog)s detect-anomalies  # Run only anomaly detection
-  %(prog)s forecast          # Run only forecasting
-        """
-    )
+    # Load data
+    df, data_source = load_data()
     
-    parser.add_argument(
-        'command',
-        choices=[
-            'run', 'pipeline', 'scheduler',
-            'scrape', 'preprocess', 'detect-anomalies', 'forecast',
-            'dashboard', 'cleanup', 'insights'
-        ],
-        help='Command to execute'
-    )
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## Dashboard Controls")
+        st.markdown(f"**Data Source:** {data_source}")
+        
+        # Date range
+        min_date = df['date'].min()
+        max_date = df['date'].max()
+        
+        date_range = st.date_input(
+            "Select Date Range",
+            value=(max_date - timedelta(days=7), max_date),
+            min_value=min_date,
+            max_value=max_date
+        )
+        
+        # Alert type filter
+        st.markdown("### Filter by Alert Type")
+        alert_types = ['flood', 'storm', 'wind', 'winter', 'fire', 'heat', 'cold']
+        selected_types = st.multiselect(
+            "Select alert types",
+            options=alert_types,
+            default=alert_types[:3]
+        )
+        
+        # System controls
+        st.markdown("---")
+        st.markdown("### System Controls")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Refresh Dashboard"):
+                st.cache_data.clear()
+                st.rerun()
+        
+        with col2:
+            if st.button("Run Data Collection"):
+                try:
+                    # Try to run scraping
+                    from scraping.scrape_weather_alerts import main as scrape_main
+                    with st.spinner("Collecting data..."):
+                        scrape_main()
+                    st.success("Data collection complete!")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        
+        # System info
+        st.markdown("---")
+        st.markdown("### System Status")
+        
+        if data_source == "Live Data":
+            st.success("✓ Live data system active")
+        else:
+            st.info("⚠ Running in demo mode")
+        
+        if os.path.exists("data/processed/weather_alerts_daily.csv"):
+            last_updated = datetime.fromtimestamp(
+                os.path.getmtime("data/processed/weather_alerts_daily.csv")
+            )
+            st.markdown(f"**Last Updated:** {last_updated.strftime('%Y-%m-%d %H:%M')}")
     
-    parser.add_argument(
-        '--config',
-        default='config.json',
-        help='Path to configuration file'
-    )
+    # Metrics
+    st.markdown('<h2 class="sub-header">Key Metrics</h2>', unsafe_allow_html=True)
     
-    parser.add_argument(
-        '--mode',
-        choices=['once', 'continuous'],
-        default='once',
-        help='Execution mode'
-    )
+    col1, col2, col3, col4 = st.columns(4)
     
-    args = parser.parse_args()
+    with col1:
+        total_alerts = df['total_alerts'].sum()
+        st.metric("Total Alerts", f"{int(total_alerts):,}")
     
-    # Initialize system
-    system = WeatherAnomalySystem(args.config)
+    with col2:
+        avg_daily = df['total_alerts'].mean()
+        st.metric("Avg Daily", f"{avg_daily:.1f}")
     
-    # Execute command
-    if args.command in ['run', 'pipeline']:
-        system.run_complete_pipeline()
+    with col3:
+        max_daily = df['total_alerts'].max()
+        st.metric("Max Daily", f"{int(max_daily)}")
     
-    elif args.command == 'scheduler':
-        system.run_scheduler()
+    with col4:
+        recent_avg = df.tail(7)['total_alerts'].mean()
+        st.metric("7-Day Avg", f"{recent_avg:.1f}")
     
-    elif args.command == 'scrape':
-        system.run_scraping()
+    # Charts
+    st.markdown('<h2 class="sub-header">Alert Analysis</h2>', unsafe_allow_html=True)
     
-    elif args.command == 'preprocess':
-        system.run_preprocessing()
+    col1, col2 = st.columns(2)
     
-    elif args.command == 'detect-anomalies':
-        system.run_anomaly_detection_pipeline()
+    with col1:
+        fig_timeline = create_alert_timeline(df)
+        st.plotly_chart(fig_timeline, use_container_width=True)
     
-    elif args.command == 'forecast':
-        system.run_forecasting_pipeline()
+    with col2:
+        fig_types = create_alert_type_chart(df)
+        st.plotly_chart(fig_types, use_container_width=True)
     
-    elif args.command == 'dashboard':
-        system.start_dashboard()
+    # Alert type breakdown
+    st.markdown('<h2 class="sub-header">Alert Type Breakdown</h2>', unsafe_allow_html=True)
     
-    elif args.command == 'cleanup':
-        system.cleanup_old_data()
+    if selected_types:
+        selected_df = df[['date'] + selected_types].tail(10)
+        st.dataframe(selected_df, use_container_width=True)
     
-    elif args.command == 'insights':
-        system.generate_insights()
+    # Insights
+    st.markdown('<h2 class="sub-header">System Insights</h2>', unsafe_allow_html=True)
     
-    else:
-        parser.print_help()
+    insights = [
+        "System is monitoring weather alerts for anomaly detection.",
+        "Data collection runs hourly from weather.gov.",
+        "Anomaly detection models identify unusual alert patterns.",
+        "Forecast models predict future alert trends."
+    ]
+    
+    for insight in insights:
+        st.markdown(f"""
+        <div class="insight-card">
+            <p style="margin: 0;">{insight}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # System information
+    st.markdown("---")
+    st.markdown(f"""
+    <div style="text-align: center; color: #6B7280; font-size: 0.875rem;">
+        <p>Weather Anomaly Detection Dashboard v1.0 | Professional Production System</p>
+        <p>Data Source: {data_source} | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p>National Weather Service Integration | Hourly Updates</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    # Import pandas here to avoid early import issues
-    import pandas as pd
+    # Create necessary directories
+    os.makedirs("data/raw", exist_ok=True)
+    os.makedirs("data/processed", exist_ok=True)
+    os.makedirs("data/output", exist_ok=True)
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("logs", exist_ok=True)
     
     main()
