@@ -18,42 +18,43 @@ from textblob import TextBlob
 import json
 import os
 
-# ========================
+# =====================
 # NLTK Resource Fix
-# ========================
-# Automatically download required NLTK resources including punkt_tab
-for resource in ["punkt", "punkt_tab", "stopwords"]:
+# =====================
+# Ensure only valid resources are downloaded
+for res in ["punkt", "stopwords"]:
     try:
-        if resource in ["punkt", "punkt_tab"]:
-            nltk.data.find(f"tokenizers/{resource}")
+        if res == "punkt":
+            nltk.data.find("tokenizers/punkt")
         else:
-            nltk.data.find(f"corpora/{resource}")
+            nltk.data.find(f"corpora/{res}")
     except LookupError:
-        nltk.download(resource, quiet=True)
+        nltk.download(res, quiet=True)
 
-# ========================
-# Logger
-# ========================
+# =====================
+# Logger setup
+# =====================
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-# ========================
-# Weather Alert Preprocessor
-# ========================
+# =====================
+# Preprocessor Class
+# =====================
 class WeatherAlertPreprocessor:
     """Preprocess weather alert text for analysis."""
     
     def __init__(self):
         self.stop_words = set(stopwords.words('english'))
+        # Add weather-specific stop words
         self.stop_words.update(['weather', 'national', 'service', 'alert', 
                                'warning', 'advisory', 'watch', 'issued'])
-        
+        # Weather severity keywords
         self.severity_keywords = {
             'severe': ['severe', 'extreme', 'dangerous', 'emergency', 'catastrophic'],
             'moderate': ['moderate', 'significant', 'considerable'],
             'minor': ['minor', 'light', 'scattered', 'isolated']
         }
-        
+
     def clean_text(self, text: str) -> str:
         if not isinstance(text, str):
             return ""
@@ -62,14 +63,14 @@ class WeatherAlertPreprocessor:
         text = re.sub(r'[^a-zA-Z\s.,!?]', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
         return text
-    
+
     def extract_keywords(self, text: str, top_n: int = 10) -> List[str]:
         tokens = word_tokenize(text.lower())
         tokens = [token for token in tokens if token not in self.stop_words and len(token) > 2]
         from collections import Counter
         word_freq = Counter(tokens)
         return [word for word, _ in word_freq.most_common(top_n)]
-    
+
     def extract_sentiment(self, text: str) -> Dict:
         blob = TextBlob(text)
         sentiment_score = blob.sentiment.polarity
@@ -88,7 +89,7 @@ class WeatherAlertPreprocessor:
             'sentiment_label': sentiment,
             'subjectivity': blob.sentiment.subjectivity
         }
-    
+
     def extract_entities(self, text: str) -> Dict:
         entities = {'locations': [], 'measurements': [], 'time_references': []}
         location_patterns = [
@@ -114,7 +115,7 @@ class WeatherAlertPreprocessor:
         for key in entities:
             entities[key] = list(set(entities[key]))
         return entities
-    
+
     def calculate_alert_metrics(self, text: str) -> Dict:
         words = text.split()
         sentences = text.split('.')
@@ -124,12 +125,11 @@ class WeatherAlertPreprocessor:
             'avg_word_length': np.mean([len(w) for w in words]) if words else 0,
             'exclamation_count': text.count('!'),
             'all_caps_count': len(re.findall(r'\b[A-Z]{2,}\b', text)),
-            'urgency_keywords': sum(1 for word in ['immediate', 'urgent', 'emergency', 'warning'] 
-                                  if word in text.lower()),
+            'urgency_keywords': sum(1 for word in ['immediate', 'urgent', 'emergency', 'warning'] if word in text.lower()),
             'numeric_count': len(re.findall(r'\b\d+\b', text))
         }
         return metrics
-    
+
     def preprocess_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
             return df
@@ -160,7 +160,7 @@ class WeatherAlertPreprocessor:
         processed_df['severity_score'] = processed_df.apply(lambda row: self._calculate_severity_score(row), axis=1)
         logger.info(f"Preprocessed {len(processed_df)} alerts")
         return processed_df
-    
+
     def _calculate_severity_score(self, row) -> float:
         score = 0.0
         severity_map = {'extreme': 1.0,'severe':0.8,'moderate':0.5,'minor':0.2,'unknown':0.1}
@@ -175,7 +175,7 @@ class WeatherAlertPreprocessor:
         if 'exclamation_count' in row:
             score += min(row['exclamation_count']*0.05,0.2)
         return min(score,1.0)
-    
+
     def create_daily_aggregates(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
             return pd.DataFrame()
@@ -198,15 +198,13 @@ class WeatherAlertPreprocessor:
         logger.info(f"Created daily aggregates for {len(daily_stats)} days")
         return daily_stats
 
-# ========================
-# Preprocessing Pipeline
-# ========================
+# =====================
+# Pipeline Function
+# =====================
 def preprocess_pipeline(input_path: str, output_path: str):
-    """Complete preprocessing pipeline."""
     try:
         if not os.path.exists(input_path):
-            logger.error(f"Input file not found: {input_path}")
-            logger.info("Creating sample data for preprocessing...")
+            logger.info("Input file not found, creating sample data...")
             dates = pd.date_range(end=datetime.now(), periods=100, freq='H')
             df = pd.DataFrame({
                 'alert_id':[f'sample_{i:03d}' for i in range(100)],
@@ -223,32 +221,43 @@ def preprocess_pipeline(input_path: str, output_path: str):
             logger.info(f"Created sample data at {input_path}")
         else:
             df = pd.read_csv(input_path)
+
         logger.info(f"Loaded {len(df)} records from {input_path}")
+
         preprocessor = WeatherAlertPreprocessor()
         processed_df = preprocessor.preprocess_dataframe(df)
         daily_stats = preprocessor.create_daily_aggregates(processed_df)
+
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         os.makedirs('data/output', exist_ok=True)
+
         processed_df.to_csv(output_path,index=False)
         daily_stats.to_csv("data/processed/weather_alerts_daily.csv",index=False)
         daily_stats.to_csv(output_path.replace('processed.csv','daily.csv'),index=False)
         daily_stats.to_csv("data/output/dashboard_data.csv",index=False)
         processed_df.to_csv("data/output/weather_alerts_processed.csv",index=False)
-        insights = [
-            f"Preprocessing completed successfully. Processed {len(df)} alerts.",
-            f"Created daily aggregates for {len(daily_stats)} days.",
-            "Data is now ready for anomaly detection and forecasting."
-        ]
-        insights_data = {'generated_at':datetime.now().isoformat(),'insights':insights,
-                         'summary':f"Processed {len(df)} alerts into {len(daily_stats)} daily records"}
+
+        insights_data = {
+            'generated_at': datetime.now().isoformat(),
+            'insights': [
+                f"Preprocessing completed successfully. Processed {len(df)} alerts.",
+                f"Created daily aggregates for {len(daily_stats)} days.",
+                "Data is now ready for anomaly detection and forecasting."
+            ],
+            'summary': f"Processed {len(df)} alerts into {len(daily_stats)} daily records"
+        }
+
         with open("data/output/insights.json",'w') as f:
-            json.dump(insights_data,f,indent=2)
+            json.dump(insights_data,f, indent=2)
+
         logger.info("Preprocessing complete and all files saved.")
+
     except Exception as e:
         logger.error(f"Preprocessing pipeline failed: {str(e)}")
+        # Fallback minimal daily data
         try:
-            os.makedirs('data/processed',exist_ok=True)
-            os.makedirs('data/output',exist_ok=True)
+            os.makedirs('data/processed', exist_ok=True)
+            os.makedirs('data/output', exist_ok=True)
             dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
             daily_stats = pd.DataFrame({
                 'issued_date':dates,
@@ -265,9 +274,9 @@ def preprocess_pipeline(input_path: str, output_path: str):
             logger.error(f"Fallback data creation also failed: {fallback_error}")
         raise
 
-# ========================
-# Main Execution
-# ========================
+# =====================
+# Main
+# =====================
 if __name__ == "__main__":
     input_file = "data/raw/weather_alerts_raw.csv"
     output_file = "data/processed/weather_alerts_processed.csv"
