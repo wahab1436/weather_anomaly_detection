@@ -771,3 +771,34 @@ if __name__ == "__main__":
     os.makedirs("logs", exist_ok=True)
     
     main()
+
+class WeatherAnomalySystem:
+    """Wrapper class to allow scheduler to call the existing pipelines."""
+
+    def __init__(self):
+        pass  # Nothing needed for now
+
+    def run_complete_pipeline(self):
+        from main import run_backend_pipeline
+        return run_backend_pipeline("complete")
+
+    def run_pipeline_step(self, step_name):
+        from main import run_backend_pipeline
+        return run_backend_pipeline(step_name)
+
+    def run_scheduler(self):
+        """Simple infinite loop scheduler (demo)."""
+        import time
+        import json
+
+        # Load config
+        with open("config.json", "r") as f:
+            config = json.load(f)
+
+        ml_interval = config.get("ml_interval_hours", 6) * 3600
+
+        while True:
+            print(f"[{datetime.now()}] Running scheduled complete pipeline...")
+            self.run_complete_pipeline()
+            print(f"[{datetime.now()}] Pipeline finished. Sleeping {ml_interval} seconds...")
+            time.sleep(ml_interval)
