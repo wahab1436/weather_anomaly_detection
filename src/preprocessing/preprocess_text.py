@@ -9,44 +9,51 @@ import re
 from typing import List, Dict
 import logging
 from datetime import datetime
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from textblob import TextBlob
 import json
 import os
-import nltk
 
-# ------------------------
-# Download required NLTK resources
-# ------------------------
-for resource in ['punkt', 'stopwords']:
+# ========================
+# NLTK Resource Fix
+# ========================
+# Automatically download required NLTK resources including punkt_tab
+for resource in ["punkt", "punkt_tab", "stopwords"]:
     try:
-        nltk.data.find(f'tokenizers/{resource}' if resource=='punkt' else f'corpora/{resource}')
+        if resource in ["punkt", "punkt_tab"]:
+            nltk.data.find(f"tokenizers/{resource}")
+        else:
+            nltk.data.find(f"corpora/{resource}")
     except LookupError:
         nltk.download(resource, quiet=True)
 
+# ========================
+# Logger
+# ========================
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-
+# ========================
+# Weather Alert Preprocessor
+# ========================
 class WeatherAlertPreprocessor:
     """Preprocess weather alert text for analysis."""
     
     def __init__(self):
         self.stop_words = set(stopwords.words('english'))
-        self.stop_words.update([
-            'weather', 'national', 'service', 'alert', 
-            'warning', 'advisory', 'watch', 'issued'
-        ])
+        self.stop_words.update(['weather', 'national', 'service', 'alert', 
+                               'warning', 'advisory', 'watch', 'issued'])
+        
         self.severity_keywords = {
             'severe': ['severe', 'extreme', 'dangerous', 'emergency', 'catastrophic'],
             'moderate': ['moderate', 'significant', 'considerable'],
             'minor': ['minor', 'light', 'scattered', 'isolated']
         }
-
-    # ------------------------
-    # Text Cleaning
-    # ------------------------
+        
     def clean_text(self, text: str) -> str:
         if not isinstance(text, str):
             return ""
@@ -55,140 +62,135 @@ class WeatherAlertPreprocessor:
         text = re.sub(r'[^a-zA-Z\s.,!?]', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
         return text
-
-    # ------------------------
-    # Keyword Extraction
-    # ------------------------
+    
     def extract_keywords(self, text: str, top_n: int = 10) -> List[str]:
         tokens = word_tokenize(text.lower())
-        tokens = [t for t in tokens if t not in self.stop_words and len(t) > 2]
+        tokens = [token for token in tokens if token not in self.stop_words and len(token) > 2]
         from collections import Counter
-        return [word for word, _ in Counter(tokens).most_common(top_n)]
-
-    # ------------------------
-    # Sentiment Analysis
-    # ------------------------
+        word_freq = Counter(tokens)
+        return [word for word, _ in word_freq.most_common(top_n)]
+    
     def extract_sentiment(self, text: str) -> Dict:
         blob = TextBlob(text)
-        score = blob.sentiment.polarity
-        if score > 0.3:
-            label = "urgent_negative"
-        elif score > 0.1:
-            label = "cautionary"
-        elif score > -0.1:
-            label = "neutral"
-        elif score > -0.3:
-            label = "concern"
+        sentiment_score = blob.sentiment.polarity
+        if sentiment_score > 0.3:
+            sentiment = "urgent_negative"
+        elif sentiment_score > 0.1:
+            sentiment = "cautionary"
+        elif sentiment_score > -0.1:
+            sentiment = "neutral"
+        elif sentiment_score > -0.3:
+            sentiment = "concern"
         else:
-            label = "severe"
-        return {'sentiment_score': score, 'sentiment_label': label, 'subjectivity': blob.sentiment.subjectivity}
-
-    # ------------------------
-    # Entity Extraction
-    # ------------------------
+            sentiment = "severe"
+        return {
+            'sentiment_score': sentiment_score,
+            'sentiment_label': sentiment,
+            'subjectivity': blob.sentiment.subjectivity
+        }
+    
     def extract_entities(self, text: str) -> Dict:
         entities = {'locations': [], 'measurements': [], 'time_references': []}
-        loc_patterns = [
+        location_patterns = [
             r'in\s+([A-Z][a-z]+\s*(?:County|Parish|Borough))',
             r'for\s+([A-Z][a-z]+\s*(?:County|Parish|Borough))',
             r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:County|Parish|Borough))'
         ]
-        for p in loc_patterns:
-            entities['locations'].extend(re.findall(p, text, re.IGNORECASE))
-        meas_pattern = r'(\d+(?:\.\d+)?)\s*(mph|inches|in|feet|ft|°F|°C|degrees|percent|%)'
-        entities['measurements'] = re.findall(meas_pattern, text, re.IGNORECASE)
+        for pattern in location_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            entities['locations'].extend(matches)
+        measurement_pattern = r'(\d+(?:\.\d+)?)\s*(mph|inches|in|feet|ft|°F|°C|degrees|percent|%)'
+        entities['measurements'] = re.findall(measurement_pattern, text, re.IGNORECASE)
         time_patterns = [
             r'until\s+(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))',
             r'from\s+(\d{1,2}:\d{2})\s*to\s*(\d{1,2}:\d{2})',
             r'(\d{1,2}/\d{1,2}/\d{4})',
             r'(\d{4}\s*UTC)'
         ]
-        for p in time_patterns:
-            matches = re.findall(p, text)
+        for pattern in time_patterns:
+            matches = re.findall(pattern, text)
             if matches:
                 entities['time_references'].extend(matches)
-        for k in entities:
-            entities[k] = list(set(entities[k]))
+        for key in entities:
+            entities[key] = list(set(entities[key]))
         return entities
-
-    # ------------------------
-    # Alert Metrics
-    # ------------------------
+    
     def calculate_alert_metrics(self, text: str) -> Dict:
         words = text.split()
         sentences = text.split('.')
         metrics = {
             'word_count': len(words),
-            'sentence_count': len([s for s in sentences if s.strip()]),
+            'sentence_count': len([s for s in sentences if len(s.strip()) > 0]),
             'avg_word_length': np.mean([len(w) for w in words]) if words else 0,
             'exclamation_count': text.count('!'),
             'all_caps_count': len(re.findall(r'\b[A-Z]{2,}\b', text)),
-            'urgency_keywords': sum(1 for w in ['immediate','urgent','emergency','warning'] if w in text.lower()),
+            'urgency_keywords': sum(1 for word in ['immediate', 'urgent', 'emergency', 'warning'] 
+                                  if word in text.lower()),
             'numeric_count': len(re.findall(r'\b\d+\b', text))
         }
         return metrics
-
-    # ------------------------
-    # DataFrame Preprocessing
-    # ------------------------
+    
     def preprocess_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
             return df
-        processed = df.copy()
-        processed['cleaned_text'] = processed['text'].apply(self.clean_text)
-        processed['keywords'] = processed['cleaned_text'].apply(lambda x: self.extract_keywords(x, top_n=5))
-        sentiment_data = processed['cleaned_text'].apply(self.extract_sentiment)
-        processed = pd.concat([processed, sentiment_data.apply(pd.Series)], axis=1)
-        processed['entities'] = processed['text'].apply(self.extract_entities)
-        metrics_data = processed['text'].apply(self.calculate_alert_metrics)
-        processed = pd.concat([processed, metrics_data.apply(pd.Series)], axis=1)
-        for col in ['issued_date','scraped_at']:
-            if col in processed.columns:
-                processed[col] = pd.to_datetime(processed[col], errors='coerce')
-        if 'issued_date' in processed.columns:
-            processed['hour'] = processed['issued_date'].dt.hour
-            processed['day_of_week'] = processed['issued_date'].dt.dayofweek
-            processed['day_of_year'] = processed['issued_date'].dt.dayofyear
-            processed['week_of_year'] = processed['issued_date'].dt.isocalendar().week
-            processed['month'] = processed['issued_date'].dt.month
-            processed['year'] = processed['issued_date'].dt.year
-        type_map = {
-            'flood':'hydrological','storm':'meteorological','wind':'meteorological',
-            'winter':'meteorological','fire':'environmental','heat':'environmental',
-            'cold':'environmental','coastal':'oceanic','air':'environmental','other':'other'
+        processed_df = df.copy()
+        processed_df['cleaned_text'] = processed_df['text'].apply(self.clean_text)
+        processed_df['keywords'] = processed_df['cleaned_text'].apply(lambda x: self.extract_keywords(x, top_n=5))
+        sentiment_data = processed_df['cleaned_text'].apply(self.extract_sentiment)
+        processed_df = pd.concat([processed_df, sentiment_data.apply(pd.Series)], axis=1)
+        processed_df['entities'] = processed_df['text'].apply(self.extract_entities)
+        metrics_data = processed_df['text'].apply(self.calculate_alert_metrics)
+        processed_df = pd.concat([processed_df, metrics_data.apply(pd.Series)], axis=1)
+        for col in ['issued_date', 'scraped_at']:
+            if col in processed_df.columns:
+                processed_df[col] = pd.to_datetime(processed_df[col], errors='coerce')
+        if 'issued_date' in processed_df.columns:
+            processed_df['hour'] = processed_df['issued_date'].dt.hour
+            processed_df['day_of_week'] = processed_df['issued_date'].dt.dayofweek
+            processed_df['day_of_year'] = processed_df['issued_date'].dt.dayofyear
+            processed_df['week_of_year'] = processed_df['issued_date'].dt.isocalendar().week
+            processed_df['month'] = processed_df['issued_date'].dt.month
+            processed_df['year'] = processed_df['issued_date'].dt.year
+        alert_type_mapping = {
+            'flood': 'hydrological','storm': 'meteorological','wind': 'meteorological',
+            'winter': 'meteorological','fire': 'environmental','heat': 'environmental',
+            'cold': 'environmental','coastal': 'oceanic','air': 'environmental','other': 'other'
         }
-        processed['alert_category'] = processed['type'].map(lambda x: type_map.get(x,'other'))
-        processed['severity_score'] = processed.apply(lambda row: self._calculate_severity_score(row), axis=1)
-        logger.info(f"Preprocessed {len(processed)} alerts")
-        return processed
-
+        processed_df['alert_category'] = processed_df['type'].map(lambda x: alert_type_mapping.get(x, 'other'))
+        processed_df['severity_score'] = processed_df.apply(lambda row: self._calculate_severity_score(row), axis=1)
+        logger.info(f"Preprocessed {len(processed_df)} alerts")
+        return processed_df
+    
     def _calculate_severity_score(self, row) -> float:
         score = 0.0
-        sev_map = {'extreme':1.0,'severe':0.8,'moderate':0.5,'minor':0.2,'unknown':0.1}
+        severity_map = {'extreme': 1.0,'severe':0.8,'moderate':0.5,'minor':0.2,'unknown':0.1}
         if 'severity' in row:
-            score += sev_map.get(str(row['severity']).lower(),0.1)
+            severity_str = str(row['severity']).lower()
+            score += severity_map.get(severity_str, 0.1)
         if 'sentiment_score' in row:
-            score += abs(min(row['sentiment_score'],0)) * 0.5
+            sentiment_score = row['sentiment_score']
+            score += abs(min(sentiment_score, 0)) * 0.5
         if 'urgency_keywords' in row:
             score += min(row['urgency_keywords']*0.1,0.3)
         if 'exclamation_count' in row:
             score += min(row['exclamation_count']*0.05,0.2)
         return min(score,1.0)
-
-    # ------------------------
-    # Daily Aggregates
-    # ------------------------
+    
     def create_daily_aggregates(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty or 'issued_date' not in df.columns:
+        if df.empty:
+            return pd.DataFrame()
+        if 'issued_date' not in df.columns:
             logger.error("No issued_date column found for aggregation")
             return pd.DataFrame()
-        df_date = df.copy().set_index('issued_date')
+        df_date = df.copy()
+        df_date.set_index('issued_date', inplace=True)
         daily_counts = df_date.resample('D').agg({
             'alert_id':'count','severity_score':'mean','sentiment_score':'mean','word_count':'mean'
         }).rename(columns={'alert_id':'total_alerts'})
-        daily_types = pd.get_dummies(df_date['type']).resample('D').sum()
-        daily_stats = pd.concat([daily_counts,daily_types],axis=1).fillna(0)
-        daily_stats['alert_intensity'] = daily_stats['total_alerts'] * daily_stats['severity_score']
+        alert_type_dummies = pd.get_dummies(df_date['type'])
+        daily_type_counts = alert_type_dummies.resample('D').sum()
+        daily_stats = pd.concat([daily_counts,daily_type_counts],axis=1).fillna(0)
+        daily_stats['alert_intensity'] = daily_stats['total_alerts']*daily_stats['severity_score']
         daily_stats['7_day_avg'] = daily_stats['total_alerts'].rolling(7).mean()
         daily_stats['30_day_avg'] = daily_stats['total_alerts'].rolling(30).mean()
         daily_stats['day_over_day_change'] = daily_stats['total_alerts'].pct_change()*100
@@ -196,11 +198,11 @@ class WeatherAlertPreprocessor:
         logger.info(f"Created daily aggregates for {len(daily_stats)} days")
         return daily_stats
 
-
-# ------------------------
-# Complete Preprocessing Pipeline
-# ------------------------
+# ========================
+# Preprocessing Pipeline
+# ========================
 def preprocess_pipeline(input_path: str, output_path: str):
+    """Complete preprocessing pipeline."""
     try:
         if not os.path.exists(input_path):
             logger.error(f"Input file not found: {input_path}")
@@ -221,22 +223,17 @@ def preprocess_pipeline(input_path: str, output_path: str):
             logger.info(f"Created sample data at {input_path}")
         else:
             df = pd.read_csv(input_path)
-
         logger.info(f"Loaded {len(df)} records from {input_path}")
-
         preprocessor = WeatherAlertPreprocessor()
         processed_df = preprocessor.preprocess_dataframe(df)
         daily_stats = preprocessor.create_daily_aggregates(processed_df)
-
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         os.makedirs('data/output', exist_ok=True)
-
         processed_df.to_csv(output_path,index=False)
         daily_stats.to_csv("data/processed/weather_alerts_daily.csv",index=False)
         daily_stats.to_csv(output_path.replace('processed.csv','daily.csv'),index=False)
         daily_stats.to_csv("data/output/dashboard_data.csv",index=False)
         processed_df.to_csv("data/output/weather_alerts_processed.csv",index=False)
-
         insights = [
             f"Preprocessing completed successfully. Processed {len(df)} alerts.",
             f"Created daily aggregates for {len(daily_stats)} days.",
@@ -246,12 +243,9 @@ def preprocess_pipeline(input_path: str, output_path: str):
                          'summary':f"Processed {len(df)} alerts into {len(daily_stats)} daily records"}
         with open("data/output/insights.json",'w') as f:
             json.dump(insights_data,f,indent=2)
-
         logger.info("Preprocessing complete and all files saved.")
-
     except Exception as e:
         logger.error(f"Preprocessing pipeline failed: {str(e)}")
-        # Fallback
         try:
             os.makedirs('data/processed',exist_ok=True)
             os.makedirs('data/output',exist_ok=True)
@@ -271,6 +265,9 @@ def preprocess_pipeline(input_path: str, output_path: str):
             logger.error(f"Fallback data creation also failed: {fallback_error}")
         raise
 
+# ========================
+# Main Execution
+# ========================
 if __name__ == "__main__":
     input_file = "data/raw/weather_alerts_raw.csv"
     output_file = "data/processed/weather_alerts_processed.csv"
