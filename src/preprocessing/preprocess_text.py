@@ -398,7 +398,7 @@ def preprocess_pipeline(input_path: str, output_path: str):
         logger.info(f"Saved processed alerts to {output_path}")
         logger.info(f"Saved dashboard data to {dashboard_output}")
         
-    except Exception as e:
+except Exception as e:
         logger.error(f"Preprocessing pipeline failed: {str(e)}")
         
         # Create minimal required files even if preprocessing fails
@@ -422,7 +422,7 @@ def preprocess_pipeline(input_path: str, output_path: str):
             daily_stats.to_csv("data/processed/weather_alerts_daily.csv", index=False)
             logger.info("Created fallback daily data file")
             
-        except Exception as fallback_error:
+    except Exception as fallback_error:
             logger.error(f"Fallback data creation also failed: {fallback_error}")
         
         raise
