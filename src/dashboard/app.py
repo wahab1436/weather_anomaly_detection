@@ -561,4 +561,459 @@ def main():
     st.markdown('<h1 class="main-header">Weather Anomaly Detection Dashboard</h1>', unsafe_allow_html=True)
     
     # Sidebar
-    with st.s
+    with st.sidebar:
+        st.markdown("## Dashboard Controls")
+        
+        # Date range selector
+        st.markdown("### Date Range")
+        if not data['daily_stats'].empty:
+            min_date = data['daily_stats'].index.min()
+            max_date = data['daily_stats'].index.max()
+            
+            date_range = st.date_input(
+                "Select date range",
+                value=(max_date - timedelta(days=30), max_date),
+                min_value=min_date,
+                max_value=max_date
+            )
+            
+            if len(date_range) == 2:
+                start_date, end_date = date_range
+                # Filter data based on selected range
+                mask = (data['daily_stats'].index >= pd.Timestamp(start_date)) & \
+                       (data['daily_stats'].index <= pd.Timestamp(end_date))
+                filtered_daily_stats = data['daily_stats'][mask]
+            else:
+                filtered_daily_stats = data['daily_stats']
+        else:
+            filtered_daily_stats = data['daily_stats']
+            st.info("No date range data available")
+        
+        # Alert type filter
+        st.markdown("### Alert Types")
+        alert_type_cols = [col for col in data['daily_stats'].columns if col in [
+            'flood', 'storm', 'wind', 'winter', 'fire', 
+            'heat', 'cold', 'coastal', 'air', 'other'
+        ]]
+        
+        if alert_type_cols:
+            selected_types = st.multiselect(
+                "Filter by alert type",
+                options=alert_type_cols,
+                default=alert_type_cols[:3] if len(alert_type_cols) >= 3 else alert_type_cols
+            )
+        else:
+            selected_types = []
+            st.info("No alert type data available")
+        
+        # Region filter
+        st.markdown("### Regions")
+        if 'alerts' in data and not data['alerts'].empty and 'region' in data['alerts'].columns:
+            regions = sorted(data['alerts']['region'].dropna().unique())
+            selected_regions = st.multiselect(
+                "Filter by region",
+                options=regions,
+                default=regions[:5] if len(regions) >= 5 else regions
+            )
+        else:
+            selected_regions = []
+        
+        # Anomaly severity filter
+        st.markdown("### Anomaly Severity")
+        severity_levels = ['low', 'medium', 'high', 'critical']
+        selected_severities = st.multiselect(
+            "Filter anomaly severity",
+            options=severity_levels,
+            default=severity_levels
+        )
+        
+        # Refresh button
+        st.markdown("---")
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+        
+        # Last updated timestamp
+        st.markdown("---")
+        if os.path.exists('data/output/dashboard_data.csv'):
+            last_updated = datetime.fromtimestamp(
+                os.path.getmtime('data/output/dashboard_data.csv')
+            )
+            st.markdown(f"**Last Updated:** {last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Main dashboard content
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Overview", 
+        "Anomaly Analysis", 
+        "Forecasts", 
+        "Alert Details"
+    ])
+    
+    with tab1:
+        # Overview Tab
+        st.markdown('<h2 class="sub-header">Dashboard Overview</h2>', unsafe_allow_html=True)
+        
+        # Display metrics
+        display_metrics(filtered_daily_stats)
+        
+        # Load insights
+        insights = load_insights()
+        
+        # Insights section
+        st.markdown('<h3 class="sub-header">Key Insights</h3>', unsafe_allow_html=True)
+        
+        for i, insight in enumerate(insights[:5]):  # Show top 5 insights
+            st.markdown(f"""
+            <div class="insight-card">
+                <p style="margin: 0; font-size: 1rem;">{insight}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Charts row 1
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Alert timeline
+            fig_timeline = create_alert_timeline(
+                filtered_daily_stats, 
+                data['anomalies'] if 'anomalies' in data else pd.DataFrame()
+            )
+            st.plotly_chart(fig_timeline, use_container_width=True)
+        
+        with col2:
+            # Alert type distribution
+            fig_types = create_alert_type_chart(filtered_daily_stats)
+            st.plotly_chart(fig_types, use_container_width=True)
+        
+        # Charts row 2
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            # Forecast chart
+            fig_forecast = create_forecast_chart(
+                data['forecasts'] if 'forecasts' in data else pd.DataFrame()
+            )
+            st.plotly_chart(fig_forecast, use_container_width=True)
+        
+        with col4:
+            # Regional map
+            fig_map = create_region_map(
+                data['alerts'] if 'alerts' in data else pd.DataFrame()
+            )
+            st.plotly_chart(fig_map, use_container_width=True)
+    
+    with tab2:
+        # Anomaly Analysis Tab
+        st.markdown('<h2 class="sub-header">Anomaly Detection Analysis</h2>', unsafe_allow_html=True)
+        
+        # Anomaly metrics
+        if 'anomalies' in data and not data['anomalies'].empty and 'is_anomaly' in data['anomalies'].columns:
+            anomaly_stats = data['anomalies']['is_anomaly'].value_counts()
+            total_anomalies = anomaly_stats.get(True, 0)
+            total_days = len(data['anomalies'])
+            anomaly_rate = (total_anomalies / total_days * 100) if total_days > 0 else 0
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Anomalies", f"{total_anomalies}")
+            
+            with col2:
+                st.metric("Anomaly Rate", f"{anomaly_rate:.1f}%")
+            
+            with col3:
+                # Filter by selected severities
+                if 'anomaly_severity' in data['anomalies'].columns:
+                    filtered_anomalies = data['anomalies'][
+                        (data['anomalies']['is_anomaly']) & 
+                        (data['anomalies']['anomaly_severity'].isin(selected_severities))
+                    ]
+                    st.metric("Filtered Anomalies", f"{len(filtered_anomalies)}")
+            
+            # Anomaly timeline with severity
+            if not filtered_daily_stats.empty:
+                fig_anomaly_detailed = go.Figure()
+                
+                # Add total alerts line
+                fig_anomaly_detailed.add_trace(
+                    go.Scatter(
+                        x=filtered_daily_stats.index,
+                        y=filtered_daily_stats['total_alerts'],
+                        name='Total Alerts',
+                        line=dict(color='#3B82F6', width=2),
+                        mode='lines'
+                    )
+                )
+                
+                # Add anomaly points with severity colors
+                if 'anomalies' in data and not data['anomalies'].empty:
+                    anomaly_points = data['anomalies'][data['anomalies']['is_anomaly']]
+                    
+                    if 'anomaly_severity' in anomaly_points.columns:
+                        # Color mapping for severities
+                        color_map = {
+                            'low': '#0EA5E9',
+                            'medium': '#F59E0B',
+                            'high': '#EF4444',
+                            'critical': '#7F1D1D'
+                        }
+                        
+                        for severity in selected_severities:
+                            severity_points = anomaly_points[anomaly_points['anomaly_severity'] == severity]
+                            if not severity_points.empty:
+                                fig_anomaly_detailed.add_trace(
+                                    go.Scatter(
+                                        x=severity_points.index,
+                                        y=severity_points['total_alerts'],
+                                        name=f'{severity.capitalize()} Anomaly',
+                                        mode='markers',
+                                        marker=dict(
+                                            color=color_map.get(severity, '#DC2626'),
+                                            size=12,
+                                            symbol='diamond',
+                                            line=dict(width=2, color='white')
+                                        )
+                                    )
+                                )
+                
+                fig_anomaly_detailed.update_layout(
+                    title='Anomaly Detection by Severity',
+                    xaxis_title='Date',
+                    yaxis_title='Number of Alerts',
+                    hovermode='x unified',
+                    template='plotly_white',
+                    height=500
+                )
+                
+                st.plotly_chart(fig_anomaly_detailed, use_container_width=True)
+            
+            # Anomaly explanations
+            st.markdown('<h3 class="sub-header">Anomaly Explanations</h3>', unsafe_allow_html=True)
+            
+            explanations_file = 'data/output/anomaly_results_explanations.json'
+            if os.path.exists(explanations_file):
+                with open(explanations_file, 'r') as f:
+                    explanations = json.load(f)
+                
+                for date_str, explanation in list(explanations.items())[:10]:  # Show latest 10
+                    severity = explanation.get('severity', 'unknown')
+                    css_class = f'anomaly-{severity}' if severity in ['low', 'medium', 'high'] else 'insight-card'
+                    
+                    st.markdown(f"""
+                    <div class="{css_class}">
+                        <p style="margin: 0; font-weight: 600;">{date_str} - {severity.upper()} severity</p>
+                        <p style="margin: 0.5rem 0 0 0;">Total Alerts: {explanation.get('total_alerts', 'N/A')}</p>
+                        <p style="margin: 0.25rem 0 0 0;">Confidence: {explanation.get('confidence', 0):.3f}</p>
+                        <p style="margin: 0.5rem 0 0 0; font-weight: 500;">Reasons:</p>
+                        <ul style="margin: 0.25rem 0 0 0;">
+                            {''.join([f'<li>{reason}</li>' for reason in explanation.get('reasons', [])])}
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # Anomaly table
+            display_anomaly_table(data['anomalies'] if 'anomalies' in data else pd.DataFrame())
+        
+        else:
+            st.info("Anomaly detection data not available yet. Run the anomaly detection pipeline first.")
+    
+    with tab3:
+        # Forecasts Tab
+        st.markdown('<h2 class="sub-header">Weather Alert Forecasts</h2>', unsafe_allow_html=True)
+        
+        if 'forecasts' in data and not data['forecasts'].empty:
+            # Forecast summary metrics
+            total_forecast = data['forecasts'][data['forecasts']['target'] == 'total_alerts']
+            
+            if not total_forecast.empty:
+                avg_forecast = total_forecast['forecast'].mean()
+                max_forecast = total_forecast['forecast'].max()
+                min_forecast = total_forecast['forecast'].min()
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Avg Forecasted Alerts", f"{avg_forecast:.1f}")
+                
+                with col2:
+                    st.metric("Max Forecast", f"{max_forecast:.0f}")
+                
+                with col3:
+                    st.metric("Min Forecast", f"{min_forecast:.0f}")
+            
+            # Forecast by alert type
+            st.markdown('<h3 class="sub-header">Forecast by Alert Type</h3>', unsafe_allow_html=True)
+            
+            forecast_targets = data['forecasts']['target'].unique()
+            
+            for target in forecast_targets:
+                target_data = data['forecasts'][data['forecasts']['target'] == target]
+                
+                if not target_data.empty:
+                    st.markdown(f"**{target.capitalize()} Alerts Forecast**")
+                    
+                    fig_target = go.Figure()
+                    
+                    fig_target.add_trace(
+                        go.Scatter(
+                            x=pd.to_datetime(target_data['date']),
+                            y=target_data['forecast'],
+                            name='Forecast',
+                            line=dict(color='#3B82F6', width=3),
+                            mode='lines'
+                        )
+                    )
+                    
+                    # Add confidence interval
+                    fig_target.add_trace(
+                        go.Scatter(
+                            x=pd.concat([pd.to_datetime(target_data['date']), 
+                                        pd.to_datetime(target_data['date'])[::-1]]),
+                            y=pd.concat([target_data['upper_bound'], 
+                                        target_data['lower_bound'][::-1]]),
+                            fill='toself',
+                            fillcolor='rgba(59, 130, 246, 0.2)',
+                            line=dict(color='rgba(255, 255, 255, 0)'),
+                            name='Confidence Interval',
+                            showlegend=True
+                        )
+                    )
+                    
+                    fig_target.update_layout(
+                        xaxis_title='Date',
+                        yaxis_title=f'Predicted {target.capitalize()} Alerts',
+                        template='plotly_white',
+                        height=300,
+                        margin=dict(l=0, r=0, t=30, b=0)
+                    )
+                    
+                    st.plotly_chart(fig_target, use_container_width=True)
+            
+            # Forecast evaluation
+            eval_file = 'data/output/forecast_results_evaluation.json'
+            if os.path.exists(eval_file):
+                with open(eval_file, 'r') as f:
+                    eval_results = json.load(f)
+                
+                st.markdown('<h3 class="sub-header">Model Performance</h3>', unsafe_allow_html=True)
+                
+                eval_df = pd.DataFrame(eval_results).T.reset_index()
+                eval_df.columns = ['Target', 'Mean MAE', 'Std MAE', 'Mean RMSE', 
+                                 'Std RMSE', 'Mean MAPE', 'N Folds']
+                
+                st.dataframe(
+                    eval_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+        
+        else:
+            st.info("Forecast data not available yet. Run the forecasting pipeline first.")
+    
+    with tab4:
+        # Alert Details Tab
+        st.markdown('<h2 class="sub-header">Detailed Alert Information</h2>', unsafe_allow_html=True)
+        
+        # Recent alerts table
+        display_recent_alerts(data['alerts'] if 'alerts' in data else pd.DataFrame())
+        
+        # Alert statistics
+        if 'alerts' in data and not data['alerts'].empty:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # Most common alert type
+                if 'type' in data['alerts'].columns:
+                    common_type = data['alerts']['type'].mode()
+                    if not common_type.empty:
+                        st.metric("Most Common Alert Type", common_type.iloc[0])
+            
+            with col2:
+                # Most affected region
+                if 'region' in data['alerts'].columns:
+                    common_region = data['alerts']['region'].mode()
+                    if not common_region.empty:
+                        st.metric("Most Affected Region", common_region.iloc[0])
+            
+            with col3:
+                # Average alert severity
+                if 'severity_score' in data['alerts'].columns:
+                    avg_severity = data['alerts']['severity_score'].mean()
+                    st.metric("Avg Alert Severity", f"{avg_severity:.2f}")
+            
+            # Alert text analysis
+            st.markdown('<h3 class="sub-header">Alert Text Analysis</h3>', unsafe_allow_html=True)
+            
+            if 'keywords' in data['alerts'].columns:
+                # Extract all keywords
+                all_keywords = []
+                for kw_list in data['alerts']['keywords'].dropna():
+                    if isinstance(kw_list, str):
+                        try:
+                            kw_list = eval(kw_list)  # Convert string representation of list
+                        except:
+                            continue
+                    all_keywords.extend(kw_list)
+                
+                if all_keywords:
+                    from collections import Counter
+                    keyword_counts = Counter(all_keywords)
+                    top_keywords = keyword_counts.most_common(20)
+                    
+                    # Create word cloud or bar chart
+                    keywords_df = pd.DataFrame(top_keywords, columns=['Keyword', 'Count'])
+                    
+                    fig_keywords = px.bar(
+                        keywords_df,
+                        x='Count',
+                        y='Keyword',
+                        orientation='h',
+                        title='Top 20 Keywords in Alert Text'
+                    )
+                    
+                    fig_keywords.update_layout(
+                        template='plotly_white',
+                        height=400
+                    )
+                    
+                    st.plotly_chart(fig_keywords, use_container_width=True)
+            
+            # Alert sentiment analysis
+            if 'sentiment_label' in data['alerts'].columns:
+                st.markdown('<h3 class="sub-header">Alert Sentiment Distribution</h3>', unsafe_allow_html=True)
+                
+                sentiment_counts = data['alerts']['sentiment_label'].value_counts()
+                
+                fig_sentiment = px.pie(
+                    values=sentiment_counts.values,
+                    names=sentiment_counts.index,
+                    title='Alert Sentiment Distribution'
+                )
+                
+                fig_sentiment.update_layout(
+                    template='plotly_white',
+                    height=400
+                )
+                
+                st.plotly_chart(fig_sentiment, use_container_width=True)
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #6B7280; font-size: 0.875rem;">
+        <p>Weather Anomaly Detection Dashboard v1.0 | Production System</p>
+        <p>Data Source: National Weather Service (weather.gov)</p>
+        <p>Updates Hourly | Last Scrape: {}
+    </div>
+    """.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')), unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    # Create necessary directories
+    os.makedirs('data/raw', exist_ok=True)
+    os.makedirs('data/processed', exist_ok=True)
+    os.makedirs('data/output', exist_ok=True)
+    os.makedirs('models', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
+    
+    # Run the dashboard
+    main()
