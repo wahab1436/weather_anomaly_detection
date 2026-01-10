@@ -10,6 +10,6 @@ plotly
 python-dotenv
 schedule
 joblib
-nltk>
+nltk
 textblob
 pytz
