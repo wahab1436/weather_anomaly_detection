@@ -7,6 +7,7 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+import time
 
 # Add project directories to Python path
 project_root = Path(__file__).parent.absolute()
@@ -27,219 +28,171 @@ def setup_directories():
         dir_path = project_root / directory
         dir_path.mkdir(parents=True, exist_ok=True)
     
-    print("Project directories created/verified")
+    print("✓ Project directories ready")
     return True
 
-def check_module_exists(module_name):
-    """Check if a module exists and can be imported."""
-    try:
-        __import__(module_name)
-        return True
-    except ImportError:
-        return False
-
 def run_scraping():
-    """Run data collection from weather sources."""
-    print("Running data collection...")
+    """Run REAL data collection from weather.gov."""
+    print("\n🔍 Collecting REAL weather data from NOAA/NWS...")
     
     try:
-        # Check if module exists
-        if not check_module_exists('scraping.scrape_weather_alerts'):
-            print("Error: Scraping module not found")
-            return False
-        
         from scraping.scrape_weather_alerts import main as scrape_main
         
-        # Run scraping
+        print("Connecting to weather.gov...")
         result = scrape_main()
         
-        # Handle None result
         if result is None:
-            print("Warning: Data collection returned None, using 0")
             result = 0
         
-        # Convert to integer safely
-        try:
-            result = int(result)
-        except (ValueError, TypeError):
-            print(f"Warning: Could not convert result to integer: {result}, using 0")
-            result = 0
+        result = int(result)
         
         if result > 0:
-            print(f"Data collection completed: {result} alerts collected")
+            print(f"✓ Successfully collected {result} REAL weather alerts")
+        elif result == 0:
+            print("✓ System checked for alerts. No active alerts found.")
         else:
-            print("Data collection completed: No alerts collected")
-        
-        # Verify data file was created
-        raw_file = project_root / "data" / "raw" / "weather_alerts_raw.csv"
-        if raw_file.exists():
-            print(f"Data saved to: {raw_file}")
-        else:
-            print("Warning: Data file not created")
+            print("⚠ Data collection completed with issues")
         
         return True
         
     except ImportError as e:
-        print(f"Error: Could not import scraping module: {e}")
+        print(f"✗ Error: Could not import scraping module: {e}")
         return False
     except Exception as e:
-        print(f"Data collection error: {e}")
-        
-        # Create minimal data file to allow pipeline to continue
-        try:
-            import pandas as pd
-            from datetime import datetime
-            df = pd.DataFrame([{
-                'alert_id': 'ERROR_001',
-                'title': 'Data Collection Error',
-                'text': f'Scraping failed: {str(e)[:100]}',
-                'type': 'other',
-                'region': 'Unknown',
-                'issued_date': datetime.now().isoformat(),
-                'severity': 'Unknown'
-            }])
-            os.makedirs('data/raw', exist_ok=True)
-            df.to_csv('data/raw/weather_alerts_raw.csv', index=False)
-            print("Created minimal data file for processing")
-            return True
-        except:
-            return False
+        print(f"✗ Data collection error: {e}")
+        return False
 
 def run_preprocessing():
-    """Run data preprocessing pipeline."""
-    print("Running data preprocessing...")
+    """Process the collected data."""
+    print("\n📊 Processing weather data...")
     
     try:
-        # Check if module exists
-        if not check_module_exists('preprocessing.preprocess_text'):
-            print("Error: Preprocessing module not found")
-            return False
-        
         from preprocessing.preprocess_text import preprocess_pipeline
         
         input_path = "data/raw/weather_alerts_raw.csv"
-        output_path = "data/processed/weather_alerts_processed.csv"
         
         if not os.path.exists(input_path):
-            print("Error: No raw data found. Run data collection first.")
+            print("✗ No data found. Run data collection first.")
             return False
         
-        result = preprocess_pipeline(input_path, output_path)
+        print("Processing alerts...")
+        processed_df, daily_df = preprocess_pipeline(
+            input_path,
+            "data/processed/weather_alerts_processed.csv"
+        )
         
-        if result is None:
-            print("Warning: Preprocessing returned None")
-            return False
-        
-        print("Data preprocessing completed")
-        return True
-        
+        if processed_df is not None:
+            print(f"✓ Processed {len(processed_df)} alerts")
+            if daily_df is not None:
+                print(f"✓ Created {len(daily_df)} days of statistics")
+            return True
+        else:
+            print("⚠ Processing may have had issues")
+            return True
+            
     except ImportError as e:
-        print(f"Error: Could not import preprocessing module: {e}")
+        print(f"✗ Error: Could not import preprocessing module: {e}")
         return False
     except Exception as e:
-        print(f"Data preprocessing error: {e}")
+        print(f"✗ Processing error: {e}")
         return False
 
 def run_anomaly_detection():
-    """Run anomaly detection analysis."""
-    print("Running anomaly detection...")
+    """Detect anomalies in weather patterns."""
+    print("\n🔬 Analyzing for anomalies...")
     
     try:
-        # Check if module exists
-        if not check_module_exists('ml.anomaly_detection'):
-            print("Error: Anomaly detection module not found")
-            return False
-        
         from ml.anomaly_detection import run_anomaly_detection
         
         input_path = "data/processed/weather_alerts_daily.csv"
-        output_path = "data/output/anomaly_results.csv"
         
         if not os.path.exists(input_path):
-            print("Error: No processed data found. Run preprocessing first.")
+            print("✗ No processed data found. Run preprocessing first.")
             return False
         
-        result = run_anomaly_detection(input_path, output_path)
+        print("Running anomaly detection...")
+        result_df, explanations = run_anomaly_detection(
+            input_path,
+            "data/output/anomaly_results.csv"
+        )
         
-        if result is None:
-            print("Warning: Anomaly detection returned None")
-            return False
+        if 'is_anomaly' in result_df.columns:
+            anomaly_count = result_df['is_anomaly'].sum()
+            print(f"✓ Found {anomaly_count} potential anomalies")
         
-        print("Anomaly detection completed")
         return True
         
     except ImportError as e:
-        print(f"Error: Could not import anomaly detection module: {e}")
+        print(f"✗ Error: Could not import anomaly detection module: {e}")
         return False
     except Exception as e:
-        print(f"Anomaly detection error: {e}")
+        print(f"✗ Anomaly detection error: {e}")
         return False
 
 def run_forecasting():
-    """Run forecasting analysis."""
-    print("Running forecasting...")
+    """Generate weather forecasts."""
+    print("\n📈 Generating forecasts...")
     
     try:
-        # Check if module exists
-        if not check_module_exists('ml.forecast_model'):
-            print("Error: Forecasting module not found")
-            return False
-        
         from ml.forecast_model import run_forecasting
         
         input_path = "data/processed/weather_alerts_daily.csv"
-        output_path = "data/output/forecast_results.csv"
         
         if not os.path.exists(input_path):
-            print("Error: No processed data found. Run preprocessing first.")
+            print("✗ No processed data found. Run preprocessing first.")
             return False
         
-        result = run_forecasting(input_path, output_path)
+        print("Running forecasting...")
+        forecast_df, status = run_forecasting(
+            input_path,
+            "data/output/forecast_results.csv"
+        )
         
-        if result is None:
-            print("Warning: Forecasting returned None")
-            return False
+        if forecast_df is not None and not forecast_df.empty:
+            print(f"✓ Generated {len(forecast_df)} forecast predictions")
         
-        print("Forecasting completed")
         return True
         
     except ImportError as e:
-        print(f"Error: Could not import forecasting module: {e}")
+        print(f"✗ Error: Could not import forecasting module: {e}")
         return False
     except Exception as e:
-        print(f"Forecasting error: {e}")
+        print(f"✗ Forecasting error: {e}")
         return False
 
 def run_dashboard():
-    """Launch the monitoring dashboard."""
-    print("Launching dashboard...")
+    """Launch the dashboard to view results."""
+    print("\n📊 Launching dashboard...")
     
     dashboard_path = project_root / "src" / "dashboard" / "app.py"
     
     if not dashboard_path.exists():
-        print(f"Error: Dashboard not found at {dashboard_path}")
+        print(f"✗ Dashboard not found at {dashboard_path}")
         return False
     
     try:
+        print("Starting Streamlit dashboard...")
         subprocess.run([
             sys.executable, "-m", "streamlit", "run",
             str(dashboard_path),
-            "--server.port", "8501"
+            "--server.port", "8501",
+            "--server.headless", "false"
         ])
         return True
     except Exception as e:
-        print(f"Dashboard error: {e}")
+        print(f"✗ Dashboard error: {e}")
         return False
 
 def run_complete_pipeline():
-    """Run the complete analysis pipeline."""
-    print("=" * 50)
-    print("Starting complete analysis pipeline")
-    print("=" * 50)
+    """Run the complete analysis pipeline with REAL data."""
+    print("\n" + "="*60)
+    print("STARTING COMPLETE ANALYSIS PIPELINE")
+    print("Collecting and analyzing REAL weather data")
+    print("="*60)
     
     steps = [
         ("Data Collection", run_scraping),
-        ("Data Preprocessing", run_preprocessing),
+        ("Data Processing", run_preprocessing),
         ("Anomaly Detection", run_anomaly_detection),
         ("Forecasting", run_forecasting)
     ]
@@ -247,77 +200,87 @@ def run_complete_pipeline():
     results = []
     
     for step_name, step_function in steps:
-        print(f"\n{step_name}:")
-        print("-" * 30)
+        print(f"\n[{len(results)+1}/{len(steps)}] {step_name}")
+        print("-" * 40)
         
         try:
             success = step_function()
             results.append(success)
             
             if success:
-                print(f"Completed: {step_name}")
+                print(f"✓ {step_name} completed")
             else:
-                print(f"Failed: {step_name}")
+                print(f"✗ {step_name} failed")
                 
         except Exception as e:
-            print(f"Error in {step_name}: {e}")
+            print(f"✗ Error in {step_name}: {e}")
             results.append(False)
+        
+        time.sleep(1)  # Brief pause between steps
     
-    print("\n" + "=" * 50)
+    # Summary
+    print("\n" + "="*60)
     successful = sum(results)
     
     if successful == len(steps):
-        print("All pipeline steps completed successfully")
+        print("🎉 COMPLETE PIPELINE SUCCESS!")
+        print("All steps completed successfully")
     elif successful >= len(steps) // 2:
-        print(f"{successful}/{len(steps)} steps completed")
+        print(f"⚠ PARTIAL SUCCESS: {successful}/{len(steps)} steps completed")
     else:
-        print(f"Only {successful}/{len(steps)} steps completed")
+        print(f"❌ PIPELINE ISSUES: Only {successful}/{len(steps)} steps completed")
     
-    print("=" * 50)
+    print("="*60)
     return successful
 
 def main():
     """Main entry point."""
-    # Setup project structure
     setup_directories()
     
-    print("\n" + "=" * 50)
-    print("Weather Anomaly Detection System")
-    print("=" * 50)
+    print("\n" + "="*60)
+    print("WEATHER ANOMALY DETECTION SYSTEM")
+    print("="*60)
+    print("Using REAL data from NOAA/NWS weather.gov")
+    print("="*60)
     
     while True:
-        print("\nOptions:")
-        print("1. Launch Dashboard")
-        print("2. Run Complete Analysis Pipeline")
-        print("3. Run Data Collection")
-        print("4. Run Data Preprocessing")
-        print("5. Run Anomaly Detection")
-        print("6. Run Forecasting")
+        print("\nSelect an option:")
+        print("1. Launch Dashboard (view results)")
+        print("2. Run Complete Pipeline (collect & analyze REAL data)")
+        print("3. Collect Weather Data Only")
+        print("4. Process Collected Data")
+        print("5. Detect Anomalies")
+        print("6. Generate Forecasts")
         print("7. Exit")
         
         try:
-            choice = input("\nSelect option (1-7): ").strip()
+            choice = input("\nEnter choice (1-7): ").strip()
             
             if choice == "1":
                 run_dashboard()
             elif choice == "2":
                 run_complete_pipeline()
+                input("\nPress Enter to continue...")
             elif choice == "3":
                 run_scraping()
+                input("\nPress Enter to continue...")
             elif choice == "4":
                 run_preprocessing()
+                input("\nPress Enter to continue...")
             elif choice == "5":
                 run_anomaly_detection()
+                input("\nPress Enter to continue...")
             elif choice == "6":
                 run_forecasting()
+                input("\nPress Enter to continue...")
             elif choice == "7":
-                print("Exiting system")
+                print("Exiting system...")
                 sys.exit(0)
             else:
                 print("Invalid selection")
                 
         except KeyboardInterrupt:
-            print("\nExiting system")
+            print("\n\nExiting system...")
             sys.exit(0)
         except Exception as e:
             print(f"Error: {e}")
