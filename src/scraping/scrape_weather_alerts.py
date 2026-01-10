@@ -216,35 +216,42 @@ class WeatherAlertScraper:
             logger.warning("No alerts to save")
             return 0  # Return 0, not None
         
-        df = pd.DataFrame(alerts)
-        
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        if os.path.exists(filepath):
-            try:
-                existing_df = pd.read_csv(filepath)
-                combined_df = pd.concat([existing_df, df]).drop_duplicates(
-                    subset=['alert_id'], 
-                    keep='last'
-                )
-                combined_df.to_csv(filepath, index=False)
-                new_count = len(df) - len(existing_df)
-                logger.info(f"Appended {new_count} new alerts to {filepath}")
-                return max(new_count, 0)  # Ensure non-negative
-            except Exception as e:
-                logger.error(f"Error appending to existing file: {str(e)}")
+        try:
+            df = pd.DataFrame(alerts)
+            
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            
+            if os.path.exists(filepath):
+                try:
+                    existing_df = pd.read_csv(filepath)
+                    combined_df = pd.concat([existing_df, df]).drop_duplicates(
+                        subset=['alert_id'], 
+                        keep='last'
+                    )
+                    combined_df.to_csv(filepath, index=False)
+                    new_count = len(df) - len(existing_df)
+                    # Ensure non-negative count
+                    new_count = max(new_count, 0)
+                    logger.info(f"Appended {new_count} new alerts to {filepath}")
+                    return int(new_count)  # Ensure integer
+                except Exception as e:
+                    logger.error(f"Error appending to existing file: {str(e)}")
+                    df.to_csv(filepath, index=False)
+                    logger.info(f"Saved {len(df)} alerts to {filepath}")
+                    return int(len(df))  # Ensure integer
+            else:
                 df.to_csv(filepath, index=False)
                 logger.info(f"Saved {len(df)} alerts to {filepath}")
-                return len(df)
-        else:
-            df.to_csv(filepath, index=False)
-            logger.info(f"Saved {len(df)} alerts to {filepath}")
-            return len(df)
+                return int(len(df))  # Ensure integer
+                
+        except Exception as e:
+            logger.error(f"Error saving alerts to CSV: {str(e)}")
+            return 0  # Return 0 on error
 
 def main() -> int:
     """Main scraping function. Returns number of alerts scraped."""
     scraper = WeatherAlertScraper()
-    alert_count = 0
+    alert_count = 0  # Initialize to 0
     
     try:
         alerts = scraper.scrape_all_alerts()
@@ -253,23 +260,29 @@ def main() -> int:
             timestamp = datetime.now().strftime('%Y%m%d')
             filepath = f"data/raw/weather_alerts_{timestamp}.csv"
             
+            # Save to timestamped file
             count1 = scraper.save_alerts_to_csv(alerts, filepath)
             
+            # Save to main raw data file
             main_filepath = "data/raw/weather_alerts_raw.csv"
             count2 = scraper.save_alerts_to_csv(alerts, main_filepath)
             
+            # Use the maximum count or length of alerts
             alert_count = max(count1, count2, len(alerts))
+            alert_count = int(alert_count)  # Ensure integer
             logger.info(f"Scraping completed successfully. Processed {alert_count} alerts.")
         else:
             logger.warning("No alerts were scraped.")
+            alert_count = 0  # Explicitly set to 0
             
     except Exception as e:
         logger.error(f"Scraping failed: {str(e)}")
-        return 0  # Return 0 on failure, not None
+        alert_count = 0  # Return 0 on failure
     
-    # FIX: Always return an integer, never None
-    return alert_count
+    # ALWAYS return an integer
+    return int(alert_count)
 
 if __name__ == "__main__":
     result = main()
     print(f"Scraping completed. Alerts processed: {result}")
+    sys.exit(0 if result > 0 else 1)
