@@ -1,7 +1,6 @@
 """
 Weather Anomaly Detection Dashboard - Complete Production System
 Main application file connecting all backend components
-FIXED VERSION: No more AttributeError
 """
 
 import streamlit as st
@@ -13,6 +12,7 @@ import sys
 import json
 import time
 import importlib
+import traceback
 
 # Set page config - Professional Business Application
 st.set_page_config(
@@ -282,11 +282,7 @@ def load_backend_data():
                 if not df.empty and len(df) > 0:
                     # Find date column
                     date_cols = ['issued_date', 'date', 'timestamp', 'Date', 'DATE']
-                    date_col = None
-                    for col in date_cols:
-                        if col in df.columns:
-                            date_col = col
-                            break
+                    date_col = next((col for col in date_cols if col in df.columns), None)
                     
                     if date_col:
                         df['date'] = pd.to_datetime(df[date_col], errors='coerce')
@@ -312,11 +308,7 @@ def load_backend_data():
                 if not df.empty and len(df) > 0:
                     # Find date column
                     date_cols = ['issued_date', 'date', 'timestamp']
-                    date_col = None
-                    for col in date_cols:
-                        if col in df.columns:
-                            date_col = col
-                            break
+                    date_col = next((col for col in date_cols if col in df.columns), None)
                     
                     if date_col:
                         df['date'] = pd.to_datetime(df[date_col], errors='coerce')
@@ -383,43 +375,30 @@ def load_backend_data():
                 except:
                     pass
         
-        # Check if we have real data
-        if (data['daily_stats'].empty and 
-            data['anomalies'].empty and 
-            data['forecasts'].empty and 
-            data['alerts'].empty):
+        # 6. Check system status
+        if real_data_found:
+            data_source = "Live Data"
+            data_quality = "high" if len(data['daily_stats']) > 20 else "medium"
+        else:
+            # Create realistic demo data
+            data = create_demo_data()
             data_source = "Demo Data"
             data_quality = "low"
-            # Create demo data
-            data = create_demo_data()
-        else:
-            data_source = "Live Data"
-            if len(data['daily_stats']) > 20:
-                data_quality = "high"
-            else:
-                data_quality = "medium"
         
         # Update system status
-        total_alerts = len(data['alerts']) if not data['alerts'].empty else 0
-        anomaly_count = 0
-        if not data['anomalies'].empty and 'is_anomaly' in data['anomalies'].columns:
-            try:
-                anomaly_count = int(data['anomalies']['is_anomaly'].sum())
-            except:
-                anomaly_count = 0
-        
         data['system_status'] = {
             'data_source': data_source,
             'data_quality': data_quality,
             'last_updated': datetime.now().isoformat(),
             'total_days': len(data['daily_stats']),
-            'total_alerts': total_alerts,
-            'anomaly_count': anomaly_count
+            'total_alerts': len(data['alerts']) if not data['alerts'].empty else 0,
+            'anomaly_count': data['anomalies']['is_anomaly'].sum() if not data['anomalies'].empty else 0
         }
         
         return data
         
     except Exception as e:
+        st.warning(f"Data loading issue: {str(e)[:100]}")
         # Return demo data on error
         data = create_demo_data()
         data['system_status'] = {
@@ -427,8 +406,8 @@ def load_backend_data():
             'data_quality': 'low',
             'last_updated': datetime.now().isoformat(),
             'total_days': len(data['daily_stats']),
-            'total_alerts': len(data['alerts']) if not data['alerts'].empty else 0,
-            'anomaly_count': 0
+            'total_alerts': len(data['alerts']),
+            'anomaly_count': data['anomalies']['is_anomaly'].sum()
         }
         return data
 
@@ -496,31 +475,16 @@ def create_demo_data():
         'upper_bound': np.clip(last_value + trend + 4, 15, 55).astype(int)
     })
     
-    # Alerts data - FIXED: Use proper date handling
+    # Alerts data
     alert_types = ['flood', 'storm', 'wind', 'winter', 'heat', 'cold', 'fire']
     areas = ['Northeast Region', 'Midwest Plains', 'Southwest Desert', 
              'Pacific Northwest', 'Southeast Coast', 'Rocky Mountains']
     
     alerts_data = []
     for i in range(150):
-        # Get random index for date selection
-        date_idx = np.random.randint(0, 60)
-        alert_date = dates[date_idx]  # This is a pandas Timestamp
+        alert_date = np.random.choice(dates[-30:])
         alert_type = np.random.choice(alert_types)
         severity = np.random.choice(['Minor', 'Moderate', 'Severe'], p=[0.5, 0.3, 0.2])
-        
-        # Convert date to string safely
-        if hasattr(alert_date, 'strftime'):
-            date_str = alert_date.strftime('%Y-%m-%d')
-        elif isinstance(alert_date, pd.Timestamp):
-            date_str = alert_date.strftime('%Y-%m-%d')
-        else:
-            # Convert to datetime first
-            try:
-                date_str = pd.to_datetime(alert_date).strftime('%Y-%m-%d')
-            except:
-                # Fallback to current date
-                date_str = datetime.now().strftime('%Y-%m-%d')
         
         alerts_data.append({
             'alert_id': f'DEMO_{i:04d}',
@@ -529,7 +493,7 @@ def create_demo_data():
             'severity': severity,
             'alert_type': alert_type,
             'area': np.random.choice(areas),
-            'issued_date': date_str,
+            'issued_date': alert_date.strftime('%Y-%m-%d'),
             'severity_score': {'Minor': 0.3, 'Moderate': 0.6, 'Severe': 0.9}[severity]
         })
     
@@ -610,7 +574,7 @@ def run_scraping_pipeline():
                     areas = ['Northeast Region', 'Midwest', 'Southwest', 'Southeast', 'Northwest']
                     
                     for i in range(50):
-                        alert_date = dates[np.random.randint(0, len(dates))]
+                        alert_date = np.random.choice(dates)
                         alert_type = np.random.choice(alert_types)
                         severity = np.random.choice(severities, p=[0.5, 0.3, 0.2])
                         
@@ -1287,12 +1251,7 @@ def main():
         # Data statistics
         if not data['daily_stats'].empty:
             total_days = len(data['daily_stats'])
-            avg_alerts = 0
-            if 'total_alerts' in data['daily_stats'].columns:
-                try:
-                    avg_alerts = data['daily_stats']['total_alerts'].mean()
-                except:
-                    avg_alerts = 0
+            avg_alerts = data['daily_stats']['total_alerts'].mean() if 'total_alerts' in data['daily_stats'].columns else 0
             
             st.markdown(f"""
             <div style="background: var(--background-tertiary); padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 0.5rem;">
@@ -1347,11 +1306,7 @@ def main():
         
         with col1:
             if not data['daily_stats'].empty and 'total_alerts' in data['daily_stats'].columns:
-                total_alerts = 0
-                try:
-                    total_alerts = data['daily_stats']['total_alerts'].sum()
-                except:
-                    total_alerts = 0
+                total_alerts = data['daily_stats']['total_alerts'].sum()
                 st.markdown(f"""
                 <div class="metric-card">
                     <h3>Total Alerts</h3>
@@ -1362,11 +1317,7 @@ def main():
         
         with col2:
             if not data['daily_stats'].empty and 'severity_score' in data['daily_stats'].columns:
-                avg_severity = 0
-                try:
-                    avg_severity = data['daily_stats']['severity_score'].mean()
-                except:
-                    avg_severity = 0
+                avg_severity = data['daily_stats']['severity_score'].mean()
                 st.markdown(f"""
                 <div class="metric-card">
                     <h3>Average Severity</h3>
@@ -1377,11 +1328,7 @@ def main():
         
         with col3:
             if not data['anomalies'].empty and 'is_anomaly' in data['anomalies'].columns:
-                anomaly_count = 0
-                try:
-                    anomaly_count = data['anomalies']['is_anomaly'].sum()
-                except:
-                    anomaly_count = 0
+                anomaly_count = data['anomalies']['is_anomaly'].sum()
                 st.markdown(f"""
                 <div class="metric-card">
                     <h3>Detected Anomalies</h3>
@@ -1393,12 +1340,7 @@ def main():
         with col4:
             if not data['forecasts'].empty:
                 if 'forecast' in data['forecasts'].columns:
-                    next_forecast = 0
-                    if len(data['forecasts']) > 0:
-                        try:
-                            next_forecast = data['forecasts'].iloc[0]['forecast']
-                        except:
-                            next_forecast = 0
+                    next_forecast = data['forecasts'].iloc[0]['forecast'] if len(data['forecasts']) > 0 else 0
                     st.markdown(f"""
                     <div class="metric-card">
                         <h3>Next Day Forecast</h3>
@@ -1447,18 +1389,10 @@ def main():
         st.markdown('<h2 class="section-header">Anomaly Analysis</h2>', unsafe_allow_html=True)
         
         if not data['anomalies'].empty and 'is_anomaly' in data['anomalies'].columns:
-            try:
-                anomalies = data['anomalies'][data['anomalies']['is_anomaly'] == True]
-            except:
-                anomalies = pd.DataFrame()
+            anomalies = data['anomalies'][data['anomalies']['is_anomaly'] == True]
             
             if not anomalies.empty:
-                try:
-                    anomaly_count = len(anomalies)
-                except:
-                    anomaly_count = 0
-                
-                st.markdown(f'<h3 class="subsection-header">Detected Anomalies: {anomaly_count}</h3>', unsafe_allow_html=True)
+                st.markdown(f'<h3 class="subsection-header">Detected Anomalies: {len(anomalies)}</h3>', unsafe_allow_html=True)
                 
                 # Display each anomaly
                 for idx, (date, row) in enumerate(anomalies.iterrows()):
@@ -1543,11 +1477,7 @@ def main():
             
             with col1:
                 if 'forecast' in data['forecasts'].columns:
-                    avg_forecast = 0
-                    try:
-                        avg_forecast = data['forecasts']['forecast'].mean()
-                    except:
-                        avg_forecast = 0
+                    avg_forecast = data['forecasts']['forecast'].mean()
                     st.markdown(f"""
                     <div class="metric-card">
                         <h3>Average Forecast</h3>
@@ -1558,11 +1488,7 @@ def main():
             
             with col2:
                 if 'forecast' in data['forecasts'].columns:
-                    max_forecast = 0
-                    try:
-                        max_forecast = data['forecasts']['forecast'].max()
-                    except:
-                        max_forecast = 0
+                    max_forecast = data['forecasts']['forecast'].max()
                     st.markdown(f"""
                     <div class="metric-card">
                         <h3>Maximum Forecast</h3>
@@ -1573,11 +1499,7 @@ def main():
             
             with col3:
                 if 'forecast' in data['forecasts'].columns:
-                    min_forecast = 0
-                    try:
-                        min_forecast = data['forecasts']['forecast'].min()
-                    except:
-                        min_forecast = 0
+                    min_forecast = data['forecasts']['forecast'].min()
                     st.markdown(f"""
                     <div class="metric-card">
                         <h3>Minimum Forecast</h3>
@@ -1592,22 +1514,14 @@ def main():
             
             # Forecast insights
             if len(data['forecasts']) > 0:
-                try:
-                    latest_forecast = data['forecasts'].iloc[0]
-                    latest_date = latest_forecast['date']
-                    if hasattr(latest_date, 'strftime'):
-                        latest_date_str = latest_date.strftime('%Y-%m-%d')
-                    else:
-                        latest_date_str = str(latest_date)
-                except:
-                    latest_forecast = {}
-                    latest_date_str = "Unknown"
+                latest_forecast = data['forecasts'].iloc[0]
+                latest_date = latest_forecast['date'].strftime('%Y-%m-%d') if hasattr(latest_forecast['date'], 'strftime') else str(latest_forecast['date'])
                 
                 st.markdown('<h3 class="subsection-header">Forecast Insights</h3>', unsafe_allow_html=True)
                 
                 st.markdown(f"""
                 <div class="insight-card">
-                    <p><strong>Latest Forecast ({latest_date_str}):</strong> {latest_forecast.get('forecast', 'N/A')} predicted alerts</p>
+                    <p><strong>Latest Forecast ({latest_date}):</strong> {latest_forecast.get('forecast', 'N/A')} predicted alerts</p>
                     <p><strong>Confidence Range:</strong> {latest_forecast.get('lower_bound', 'N/A')} to {latest_forecast.get('upper_bound', 'N/A')}</p>
                     <p><strong>Forecast Period:</strong> {len(data['forecasts'])} days ahead</p>
                 </div>
@@ -1643,11 +1557,7 @@ def main():
             
             with col2:
                 if 'severity' in data['alerts'].columns:
-                    unique_severities = 0
-                    try:
-                        unique_severities = data['alerts']['severity'].nunique()
-                    except:
-                        unique_severities = 0
+                    unique_severities = data['alerts']['severity'].nunique()
                     st.markdown(f"""
                     <div class="metric-card">
                         <h3>Severity Levels</h3>
@@ -1658,11 +1568,7 @@ def main():
             
             with col3:
                 if 'alert_type' in data['alerts'].columns:
-                    unique_types = 0
-                    try:
-                        unique_types = data['alerts']['alert_type'].nunique()
-                    except:
-                        unique_types = 0
+                    unique_types = data['alerts']['alert_type'].nunique()
                     st.markdown(f"""
                     <div class="metric-card">
                         <h3>Alert Types</h3>
@@ -1675,26 +1581,20 @@ def main():
             if 'alert_type' in data['alerts'].columns:
                 st.markdown('<h3 class="subsection-header">Alert Type Distribution</h3>', unsafe_allow_html=True)
                 
-                try:
-                    type_counts = data['alerts']['alert_type'].value_counts()
-                    for alert_type, count in type_counts.items():
-                        percentage = (count / total_alerts) * 100
-                        st.progress(
-                            count / total_alerts,
-                            text=f"{alert_type.title()}: {count} alerts ({percentage:.1f}%)"
-                        )
-                except:
-                    pass
+                type_counts = data['alerts']['alert_type'].value_counts()
+                for alert_type, count in type_counts.items():
+                    percentage = (count / total_alerts) * 100
+                    st.progress(
+                        count / total_alerts,
+                        text=f"{alert_type.title()}: {count} alerts ({percentage:.1f}%)"
+                    )
             
             # Severity distribution
             if 'severity' in data['alerts'].columns:
                 st.markdown('<h3 class="subsection-header">Severity Distribution</h3>', unsafe_allow_html=True)
                 
-                try:
-                    severity_counts = data['alerts']['severity'].value_counts()
-                    st.dataframe(severity_counts, use_container_width=True)
-                except:
-                    pass
+                severity_counts = data['alerts']['severity'].value_counts()
+                st.dataframe(severity_counts, use_container_width=True)
             
             # Alert data table
             st.markdown('<h3 class="subsection-header">Recent Alerts</h3>', unsafe_allow_html=True)
@@ -1907,7 +1807,10 @@ def initialize_system():
             "data/processed",
             "data/output",
             "models",
-            "logs"
+            "logs",
+            "scraping",
+            "preprocessing",
+            "ml"
         ]
         
         for directory in required_dirs:
@@ -1947,6 +1850,7 @@ def initialize_system():
         return True
         
     except Exception as e:
+        print(f"Initialization error: {e}")
         return False
 
 if __name__ == "__main__":
