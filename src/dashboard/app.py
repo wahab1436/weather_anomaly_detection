@@ -1,5 +1,3 @@
-src/dashboard/app.py
-
 #!/usr/bin/env python3
 """
 Main entry point for Weather Anomaly Detection System
