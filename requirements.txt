@@ -1,20 +1,27 @@
+# Weather Anomaly Detection System - Exact Requirements
+streamlit==1.29.0
+pandas==1.5.3
+numpy==1.24.3
+requests==2.31.0
+beautifulsoup4==4.12.2
+lxml==4.9.3
 
-streamlit
-pandas
-numpy
-requests
-beautifulsoup4
-lxml
-scikit-learn
-joblib
-xgboost
-nltk
-textblob
-plotly
-python-dateutil
-pytz
-typing-extensions
-pydantic
-pytest
-black
-flake8
+# Machine Learning
+scikit-learn==1.2.2
+joblib==1.2.0
+xgboost==1.7.5
+
+# Text Processing
+nltk==3.8.1
+textblob==0.17.1
+
+# Visualization
+plotly==5.17.0
+
+# Utilities
+python-dateutil==2.8.2
+pytz==2023.3
+pydantic==1.10.12
+
+# Optional for scraping
+urllib3==2.0.7
