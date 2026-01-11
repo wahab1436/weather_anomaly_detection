@@ -1,135 +1,171 @@
 #!/usr/bin/env python3
 """
-Main pipeline orchestrator for Weather Anomaly Detection System.
-Run this script to execute the complete data pipeline.
+Weather Anomaly Detection System - Main Entry Point
+Connects to all backend modules in src/
 """
 
-import logging
-import schedule
-import time
-from datetime import datetime
 import os
 import sys
+import argparse
+from datetime import datetime
 
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+# Add src directory to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from scraping.scrape_weather_alerts import main as scrape_main
-from preprocessing.preprocess_text import main as preprocess_main
-from ml.anomaly_detection import main as anomaly_main
-from ml.forecast_model import main as forecast_main
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/pipeline.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-def run_complete_pipeline():
-    """Run the complete data pipeline."""
-    logger.info("Starting complete pipeline execution")
+def run_scraping():
+    """Run web scraping from weather.gov."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Running scraping...")
     
     try:
-        # Step 1: Scrape data
-        logger.info("Step 1: Scraping weather alerts")
-        scrape_main()
+        from scraping.scrape_weather_alerts import main as scrape_main
+        count = scrape_main()
+        print(f"Scraping completed. Alerts: {count}")
+        return True
+    except Exception as e:
+        print(f"Scraping error: {e}")
+        return False
+
+def run_preprocessing():
+    """Run data preprocessing."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Running preprocessing...")
+    
+    try:
+        from preprocessing.preprocess_text import preprocess_pipeline
         
-        # Step 2: Preprocess data
-        logger.info("Step 2: Preprocessing data")
-        preprocess_main()
+        # Check if raw data exists
+        if not os.path.exists("data/raw/weather_alerts_raw.csv"):
+            print("Error: No raw data found. Run scraping first.")
+            return False
         
-        # Step 3: Detect anomalies
-        logger.info("Step 3: Detecting anomalies")
-        anomaly_main()
+        processed_df, daily_df = preprocess_pipeline(
+            "data/raw/weather_alerts_raw.csv",
+            "data/processed/weather_alerts_processed.csv"
+        )
         
-        # Step 4: Generate forecasts
-        logger.info("Step 4: Generating forecasts")
-        forecast_main()
-        
-        logger.info("Pipeline completed successfully")
+        if processed_df is not None:
+            print(f"Preprocessing completed. Alerts: {len(processed_df)}")
+            return True
+        return False
         
     except Exception as e:
-        logger.error(f"Pipeline failed: {str(e)}", exc_info=True)
+        print(f"Preprocessing error: {e}")
+        return False
 
-def run_hourly():
-    """Run pipeline hourly."""
-    run_complete_pipeline()
+def run_anomaly_detection():
+    """Run anomaly detection."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Running anomaly detection...")
+    
+    try:
+        from ml.anomaly_detection import run_anomaly_detection
+        
+        if not os.path.exists("data/processed/weather_alerts_daily.csv"):
+            print("Error: No processed data found.")
+            return False
+        
+        result_df, explanations = run_anomaly_detection(
+            "data/processed/weather_alerts_daily.csv",
+            "data/output/anomaly_results.csv",
+            "models/isolation_forest.pkl"
+        )
+        
+        print(f"Anomaly detection completed. Results: {len(result_df)}")
+        return True
+        
+    except Exception as e:
+        print(f"Anomaly detection error: {e}")
+        return False
 
-def run_daily():
-    """Run pipeline daily (for more intensive tasks)."""
-    logger.info("Running daily maintenance tasks")
-    # Additional daily tasks can be added here
+def run_forecasting():
+    """Run forecasting."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Running forecasting...")
+    
+    try:
+        from ml.forecast_model import run_forecasting
+        
+        if not os.path.exists("data/processed/weather_alerts_daily.csv"):
+            print("Error: No processed data found.")
+            return False
+        
+        forecast_df, status = run_forecasting(
+            "data/processed/weather_alerts_daily.csv",
+            "data/output/forecast_results.csv",
+            "models/xgboost_forecast.pkl"
+        )
+        
+        print(f"Forecasting completed. Forecasts: {len(forecast_df)}")
+        return True
+        
+    except Exception as e:
+        print(f"Forecasting error: {e}")
+        return False
+
+def run_complete_pipeline():
+    """Run complete end-to-end pipeline."""
+    print("\n" + "="*60)
+    print("WEATHER ANOMALY DETECTION PIPELINE")
+    print("="*60)
+    
+    # Ensure directories exist
+    os.makedirs("data/raw", exist_ok=True)
+    os.makedirs("data/processed", exist_ok=True)
+    os.makedirs("data/output", exist_ok=True)
+    os.makedirs("models", exist_ok=True)
+    
+    steps = [
+        ("Scraping", run_scraping),
+        ("Preprocessing", run_preprocessing),
+        ("Anomaly Detection", run_anomaly_detection),
+        ("Forecasting", run_forecasting)
+    ]
+    
+    results = []
+    
+    for step_name, step_func in steps:
+        print(f"\n--- {step_name} ---")
+        success = step_func()
+        results.append(success)
+    
+    # Summary
+    print("\n" + "="*60)
+    successful = sum(results)
+    total = len(steps)
+    
+    print(f"PIPELINE COMPLETED: {successful}/{total} steps successful")
+    
+    if successful == total:
+        print("Status: All steps completed successfully")
+    elif successful >= total // 2:
+        print("Status: Partial success - check logs for details")
+    else:
+        print("Status: Most steps failed - system needs attention")
+    
+    print("="*60)
+    return successful
 
 def main():
-    """Main function with scheduling options."""
-    import argparse
+    """Main entry point with command line interface."""
+    parser = argparse.ArgumentParser(
+        description='Weather Anomaly Detection System Backend'
+    )
     
-    parser = argparse.ArgumentParser(description='Weather Anomaly Detection Pipeline')
-    parser.add_argument('--run-once', action='store_true', help='Run pipeline once and exit')
-    parser.add_argument('--schedule', action='store_true', help='Schedule pipeline to run hourly')
+    parser.add_argument(
+        'command',
+        choices=['all', 'scrape', 'preprocess', 'anomaly', 'forecast'],
+        help='Command to execute'
+    )
     
     args = parser.parse_args()
     
-    # Create necessary directories
-    os.makedirs('logs', exist_ok=True)
-    os.makedirs('data/raw/backups', exist_ok=True)
-    os.makedirs('data/processed', exist_ok=True)
-    os.makedirs('data/output', exist_ok=True)
-    os.makedirs('models', exist_ok=True)
-    
-    if args.run_once:
-        logger.info("Running pipeline once")
+    if args.command == 'all':
         run_complete_pipeline()
-        
-    elif args.schedule:
-        logger.info("Starting scheduled pipeline (hourly)")
-        
-        # Schedule hourly runs
-        schedule.every().hour.at(":00").do(run_hourly)
-        
-        # Schedule daily maintenance at 2 AM
-        schedule.every().day.at("02:00").do(run_daily)
-        
-        # Run once immediately
-        run_complete_pipeline()
-        
-        # Keep running
-        while True:
-            schedule.run_pending()
-            time.sleep(60)  # Check every minute
-            
-    else:
-        # Interactive mode
-        print("\n" + "="*60)
-        print("WEATHER ANOMALY DETECTION PIPELINE")
-        print("="*60)
-        print("\nOptions:")
-        print("1. Run pipeline once")
-        print("2. Start scheduled pipeline (hourly)")
-        print("3. Start dashboard")
-        print("4. Exit")
-        
-        choice = input("\nEnter choice (1-4): ").strip()
-        
-        if choice == '1':
-            run_complete_pipeline()
-        elif choice == '2':
-            # Run in background
-            print("Starting scheduled pipeline in background...")
-            import subprocess
-            subprocess.Popen([sys.executable, __file__, '--schedule'])
-            print("Scheduled pipeline started. Check logs/pipeline.log for output.")
-        elif choice == '3':
-            print("Starting dashboard...")
-            import subprocess
-            subprocess.run([sys.executable, '-m', 'streamlit', 'run', 'src/dashboard/app.py'])
-        else:
-            print("Exiting.")
+    elif args.command == 'scrape':
+        run_scraping()
+    elif args.command == 'preprocess':
+        run_preprocessing()
+    elif args.command == 'anomaly':
+        run_anomaly_detection()
+    elif args.command == 'forecast':
+        run_forecasting()
 
 if __name__ == "__main__":
     main()
