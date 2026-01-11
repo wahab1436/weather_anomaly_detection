@@ -1,289 +1,523 @@
-"""
-Weather Anomaly Detection Dashboard
-"""
-
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 from datetime import datetime, timedelta
 import os
 import json
-from pathlib import Path
+import logging
+from typing import Dict, List, Optional
 
-# Add src to path for imports
-project_root = Path(__file__).parent.parent.parent
-import sys
-sys.path.insert(0, str(project_root / 'src'))
-
-# Set page config
+# Configure page
 st.set_page_config(
     page_title="Weather Anomaly Detection Dashboard",
-    page_icon=None,
+    page_icon="🌦️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: #1E3A8A;
-        margin-bottom: 1rem;
-    }
-    .metric-card {
-        background-color: #F9FAFB;
-        border-radius: 0.5rem;
-        padding: 1rem;
-        border-left: 4px solid #3B82F6;
-        margin-bottom: 1rem;
-    }
-    .insight-card {
-        background-color: #EFF6FF;
-        border-radius: 0.5rem;
-        padding: 1rem;
-        margin-bottom: 1rem;
-        border: 1px solid #DBEAFE;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-@st.cache_data(ttl=300)
-def load_data():
-    """Load all data from the pipeline."""
-    data = {
-        'daily_stats': pd.DataFrame(),
-        'anomalies': pd.DataFrame(),
-        'forecasts': pd.DataFrame(),
-        'alerts': pd.DataFrame()
-    }
+class WeatherDashboard:
+    """Main dashboard class for weather anomaly detection."""
     
-    # Load daily stats
-    daily_path = "data/processed/weather_alerts_daily.csv"
-    if os.path.exists(daily_path):
-        df = pd.read_csv(daily_path)
-        if not df.empty:
-            if 'issued_date' in df.columns:
-                df['issued_date'] = pd.to_datetime(df['issued_date'], errors='coerce')
-                df.set_index('issued_date', inplace=True)
-            data['daily_stats'] = df
-    
-    # Load anomalies
-    anomaly_path = "data/output/anomaly_results.csv"
-    if os.path.exists(anomaly_path):
-        df = pd.read_csv(anomaly_path)
-        if not df.empty:
-            if 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date'], errors='coerce')
-                df.set_index('date', inplace=True)
-            data['anomalies'] = df
-    
-    # Load forecasts
-    forecast_path = "data/output/forecast_results.csv"
-    if os.path.exists(forecast_path):
-        df = pd.read_csv(forecast_path)
-        if not df.empty:
-            data['forecasts'] = df
-    
-    # Load alerts
-    alert_path = "data/processed/weather_alerts_processed.csv"
-    if os.path.exists(alert_path):
-        df = pd.read_csv(alert_path)
-        if not df.empty:
-            data['alerts'] = df
-    
-    return data
-
-def create_timeline_chart(daily_stats, anomalies):
-    """Create alert timeline with anomalies."""
-    if daily_stats.empty:
+    def __init__(self):
+        self.data_dir = 'data/output'
+        self.models_dir = 'models'
+        
+    @st.cache_data(ttl=3600)  # Cache for 1 hour
+    def load_daily_data(_self) -> Optional[pd.DataFrame]:
+        """Load daily alert counts."""
+        try:
+            filepath = os.path.join(_self.data_dir, 'daily_alert_counts.csv')
+            if os.path.exists(filepath):
+                df = pd.read_csv(filepath, parse_dates=['date'])
+                return df
+        except Exception as e:
+            logger.error(f"Failed to load daily data: {str(e)}")
         return None
     
-    fig = go.Figure()
+    @st.cache_data(ttl=3600)
+    def load_anomaly_data(_self) -> Optional[pd.DataFrame]:
+        """Load anomaly detection results."""
+        try:
+            filepath = os.path.join(_self.data_dir, 'anomaly_detection_results.csv')
+            if os.path.exists(filepath):
+                df = pd.read_csv(filepath, parse_dates=['date'])
+                return df
+        except Exception as e:
+            logger.error(f"Failed to load anomaly data: {str(e)}")
+        return None
     
-    if 'total_alerts' in daily_stats.columns:
+    @st.cache_data(ttl=3600)
+    def load_forecast_data(_self) -> Optional[pd.DataFrame]:
+        """Load forecast data."""
+        try:
+            filepath = os.path.join(_self.data_dir, 'alert_forecasts.csv')
+            if os.path.exists(filepath):
+                df = pd.read_csv(filepath, parse_dates=['date'])
+                return df
+        except Exception as e:
+            logger.error(f"Failed to load forecast data: {str(e)}")
+        return None
+    
+    @st.cache_data(ttl=3600)
+    def load_anomaly_insights(_self) -> Dict:
+        """Load anomaly insights."""
+        try:
+            filepath = os.path.join(_self.data_dir, 'anomaly_insights.json')
+            if os.path.exists(filepath):
+                with open(filepath, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load anomaly insights: {str(e)}")
+        return {}
+    
+    @st.cache_data(ttl=3600)
+    def load_forecast_insights(_self) -> Dict:
+        """Load forecast insights."""
+        try:
+            filepath = os.path.join(_self.data_dir, 'forecast_insights.json')
+            if os.path.exists(filepath):
+                with open(filepath, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load forecast insights: {str(e)}")
+        return {}
+    
+    @st.cache_data(ttl=3600)
+    def load_raw_alerts(_self) -> Optional[pd.DataFrame]:
+        """Load raw alert data for table display."""
+        try:
+            filepath = 'data/raw/weather_alerts_raw.csv'
+            if os.path.exists(filepath):
+                df = pd.read_csv(filepath, parse_dates=['scraped_at'])
+                # Take only recent alerts
+                if 'scraped_at' in df.columns:
+                    cutoff = datetime.now() - timedelta(days=7)
+                    df = df[df['scraped_at'] >= cutoff]
+                return df.tail(100)  # Limit to 100 most recent
+        except Exception as e:
+            logger.error(f"Failed to load raw alerts: {str(e)}")
+        return None
+    
+    def create_alert_trend_chart(self, daily_df: pd.DataFrame, anomaly_df: pd.DataFrame = None) -> go.Figure:
+        """Create time series chart of alerts with anomalies."""
+        fig = go.Figure()
+        
+        # Add daily alerts line
         fig.add_trace(go.Scatter(
-            x=daily_stats.index,
-            y=daily_stats['total_alerts'],
-            name='Total Alerts',
-            line=dict(color='#3B82F6', width=3),
-            mode='lines'
+            x=daily_df['date'],
+            y=daily_df['total_alerts'],
+            mode='lines+markers',
+            name='Daily Alerts',
+            line=dict(color='#1f77b4', width=2),
+            marker=dict(size=6)
         ))
+        
+        # Add anomaly markers if available
+        if anomaly_df is not None and 'is_anomaly' in anomaly_df.columns:
+            anomalies = anomaly_df[anomaly_df['is_anomaly'] == 1]
+            if not anomalies.empty:
+                fig.add_trace(go.Scatter(
+                    x=anomalies['date'],
+                    y=anomalies['total_alerts'],
+                    mode='markers',
+                    name='Anomalies',
+                    marker=dict(
+                        color='red',
+                        size=12,
+                        symbol='diamond',
+                        line=dict(width=2, color='darkred')
+                    ),
+                    hovertemplate='<b>Anomaly Detected</b><br>' +
+                                 'Date: %{x}<br>' +
+                                 'Alerts: %{y}<br>' +
+                                 'Score: %{customdata:.3f}<extra></extra>',
+                    customdata=anomalies['anomaly_score'] if 'anomaly_score' in anomalies.columns else [0]*len(anomalies)
+                ))
+        
+        fig.update_layout(
+            title='Daily Weather Alerts with Anomaly Detection',
+            xaxis_title='Date',
+            yaxis_title='Number of Alerts',
+            hovermode='x unified',
+            template='plotly_white',
+            height=400
+        )
+        
+        return fig
     
-    if not anomalies.empty and 'is_anomaly' in anomalies.columns:
-        anomaly_points = anomalies[anomalies['is_anomaly']]
-        if not anomaly_points.empty and 'total_alerts' in anomaly_points.columns:
+    def create_alert_type_chart(self, daily_df: pd.DataFrame) -> go.Figure:
+        """Create stacked area chart of alert types."""
+        # Identify alert type columns
+        alert_type_cols = [col for col in daily_df.columns if 'alert_type' in str(col)]
+        
+        if not alert_type_cols:
+            # Create empty figure
+            fig = go.Figure()
+            fig.update_layout(
+                title='Alert Types Over Time',
+                xaxis_title='Date',
+                yaxis_title='Number of Alerts',
+                template='plotly_white',
+                height=400
+            )
+            return fig
+        
+        # Prepare data for stacked area
+        fig = go.Figure()
+        
+        for col in alert_type_cols[:10]:  # Limit to top 10 types
+            alert_type = col.replace('alert_type_', '').replace('_', ' ').title()
             fig.add_trace(go.Scatter(
-                x=anomaly_points.index,
-                y=anomaly_points['total_alerts'],
-                name='Anomalies',
-                mode='markers',
-                marker=dict(
-                    color='#EF4444',
-                    size=10,
-                    symbol='diamond'
-                )
+                x=daily_df['date'],
+                y=daily_df[col],
+                mode='lines',
+                name=alert_type,
+                stackgroup='one'
             ))
+        
+        fig.update_layout(
+            title='Alert Types Over Time',
+            xaxis_title='Date',
+            yaxis_title='Number of Alerts',
+            hovermode='x unified',
+            template='plotly_white',
+            height=400
+        )
+        
+        return fig
     
-    fig.update_layout(
-        title='Weather Alert Timeline',
-        xaxis_title='Date',
-        yaxis_title='Number of Alerts',
-        template='plotly_white',
-        height=400
-    )
-    
-    return fig
-
-def create_forecast_chart(forecasts):
-    """Create forecast visualization."""
-    if forecasts.empty or 'date' not in forecasts.columns:
-        return None
-    
-    # Filter for total alerts forecast
-    if 'target' in forecasts.columns:
-        total_forecast = forecasts[forecasts['target'] == 'total_alerts']
-    else:
-        total_forecast = forecasts.head(7)
-    
-    if total_forecast.empty:
-        return None
-    
-    # Convert date column
-    total_forecast['date'] = pd.to_datetime(total_forecast['date'], errors='coerce')
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=total_forecast['date'],
-        y=total_forecast['forecast'],
-        name='Forecast',
-        line=dict(color='#3B82F6', width=3),
-        mode='lines+markers'
-    ))
-    
-    if 'lower_bound' in total_forecast.columns and 'upper_bound' in total_forecast.columns:
+    def create_forecast_chart(self, historical_df: pd.DataFrame, forecast_df: pd.DataFrame) -> go.Figure:
+        """Create chart with historical data and forecasts."""
+        fig = go.Figure()
+        
+        # Historical data
         fig.add_trace(go.Scatter(
-            x=pd.concat([total_forecast['date'], total_forecast['date'][::-1]]),
-            y=pd.concat([total_forecast['upper_bound'], total_forecast['lower_bound'][::-1]]),
-            fill='toself',
-            fillcolor='rgba(59, 130, 246, 0.2)',
-            line=dict(color='rgba(255, 255, 255, 0)'),
-            name='Confidence Interval'
+            x=historical_df['date'],
+            y=historical_df['total_alerts'],
+            mode='lines',
+            name='Historical',
+            line=dict(color='#1f77b4', width=2)
         ))
-    
-    fig.update_layout(
-        title='7-Day Forecast',
-        xaxis_title='Date',
-        yaxis_title='Predicted Alerts',
-        template='plotly_white',
-        height=350
-    )
-    
-    return fig
-
-def main():
-    """Main dashboard function."""
-    # Header
-    st.markdown('<h1 class="main-header">Weather Anomaly Detection Dashboard</h1>', unsafe_allow_html=True)
-    
-    # Load data
-    data = load_data()
-    daily_stats = data['daily_stats']
-    anomalies = data['anomalies']
-    forecasts = data['forecasts']
-    alerts = data['alerts']
-    
-    # Sidebar
-    with st.sidebar:
-        st.markdown("### Dashboard Controls")
         
-        if st.button("Refresh Data", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
+        # Forecast
+        if not forecast_df.empty:
+            fig.add_trace(go.Scatter(
+                x=forecast_df['date'],
+                y=forecast_df['predicted_alerts'],
+                mode='lines+markers',
+                name='Forecast',
+                line=dict(color='orange', width=2, dash='dash')
+            ))
+            
+            # Confidence interval
+            fig.add_trace(go.Scatter(
+                x=forecast_df['date'].tolist() + forecast_df['date'].tolist()[::-1],
+                y=forecast_df['upper_bound'].tolist() + forecast_df['lower_bound'].tolist()[::-1],
+                fill='toself',
+                fillcolor='rgba(255, 165, 0, 0.2)',
+                line=dict(color='rgba(255, 255, 255, 0)'),
+                name='Confidence Interval',
+                showlegend=True
+            ))
         
-        st.markdown("---")
-        st.markdown("### System Status")
+        fig.update_layout(
+            title='7-Day Alert Forecast',
+            xaxis_title='Date',
+            yaxis_title='Number of Alerts',
+            hovermode='x unified',
+            template='plotly_white',
+            height=400
+        )
         
-        # Data status
-        total_days = len(daily_stats) if not daily_stats.empty else 0
-        total_alerts = len(alerts) if not alerts.empty else 0
-        anomaly_count = anomalies['is_anomaly'].sum() if not anomalies.empty and 'is_anomaly' in anomalies.columns else 0
-        
-        st.info(f"Data Days: {total_days}")
-        st.info(f"Total Alerts: {total_alerts}")
-        st.info(f"Anomalies: {anomaly_count}")
+        return fig
     
-    # Main content
-    tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Anomalies", "Forecasts", "Data"])
+    def create_summary_metrics(self, daily_df: pd.DataFrame) -> Dict:
+        """Calculate summary metrics for display."""
+        metrics = {}
+        
+        if daily_df.empty:
+            return metrics
+        
+        # Today's date
+        today = datetime.now().date()
+        
+        # Find today's data or most recent
+        daily_df['date_only'] = pd.to_datetime(daily_df['date']).dt.date
+        recent_data = daily_df[daily_df['date_only'] == today]
+        
+        if recent_data.empty:
+            recent_data = daily_df.iloc[-1:]
+        
+        # Current alerts
+        metrics['current_alerts'] = int(recent_data['total_alerts'].iloc[0])
+        
+        # Yesterday's alerts for comparison
+        if len(daily_df) > 1:
+            yesterday_data = daily_df.iloc[-2]
+            metrics['yesterday_alerts'] = int(yesterday_data['total_alerts'])
+            metrics['change_percent'] = ((metrics['current_alerts'] - metrics['yesterday_alerts']) / 
+                                       max(metrics['yesterday_alerts'], 1)) * 100
+        else:
+            metrics['yesterday_alerts'] = 0
+            metrics['change_percent'] = 0
+        
+        # 7-day average
+        if len(daily_df) >= 7:
+            metrics['week_avg'] = daily_df['total_alerts'].tail(7).mean()
+            metrics['week_high'] = daily_df['total_alerts'].tail(7).max()
+        else:
+            metrics['week_avg'] = daily_df['total_alerts'].mean()
+            metrics['week_high'] = daily_df['total_alerts'].max()
+        
+        # Alert type metrics
+        alert_type_cols = [col for col in daily_df.columns if 'alert_type' in str(col)]
+        if alert_type_cols:
+            recent_row = daily_df.iloc[-1]
+            alert_counts = {col.replace('alert_type_', ''): recent_row[col] 
+                          for col in alert_type_cols if recent_row[col] > 0}
+            metrics['top_alert_type'] = max(alert_counts.items(), key=lambda x: x[1])[0] if alert_counts else "None"
+        
+        return metrics
     
-    with tab1:
-        # Overview tab
+    def run(self):
+        """Run the dashboard application."""
+        # Title and description
+        st.title("Weather Anomaly Detection Dashboard")
+        st.markdown("""
+        This dashboard monitors weather alert patterns, detects anomalies, and forecasts future alerts 
+        using data from official weather sources.
+        """)
+        
+        # Load data
+        with st.spinner("Loading data..."):
+            daily_df = self.load_daily_data()
+            anomaly_df = self.load_anomaly_data()
+            forecast_df = self.load_forecast_data()
+            anomaly_insights = self.load_anomaly_insights()
+            forecast_insights = self.load_forecast_insights()
+            raw_alerts = self.load_raw_alerts()
+        
+        if daily_df is None:
+            st.error("No data available. Please run the data collection pipeline first.")
+            return
+        
+        # Last updated timestamp
+        data_file = 'data/output/daily_alert_counts.csv'
+        if os.path.exists(data_file):
+            mtime = os.path.getmtime(data_file)
+            last_updated = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            st.caption(f"Last updated: {last_updated}")
+        
+        # Summary metrics row
+        st.subheader("Current Status")
+        metrics = self.create_summary_metrics(daily_df)
+        
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            if not daily_stats.empty and 'total_alerts' in daily_stats.columns:
-                total = daily_stats['total_alerts'].sum()
-                st.metric("Total Alerts", f"{int(total):,}")
+            delta = f"{metrics.get('change_percent', 0):.1f}%"
+            delta_color = "normal" if metrics.get('change_percent', 0) == 0 else (
+                "inverse" if metrics.get('change_percent', 0) > 0 else "normal"
+            )
+            st.metric(
+                label="Today's Alerts",
+                value=metrics.get('current_alerts', 0),
+                delta=delta,
+                delta_color=delta_color
+            )
         
         with col2:
-            if not daily_stats.empty and 'total_alerts' in daily_stats.columns:
-                avg = daily_stats['total_alerts'].mean()
-                st.metric("Avg Daily", f"{avg:.1f}")
+            st.metric(
+                label="7-Day Average",
+                value=f"{metrics.get('week_avg', 0):.0f}"
+            )
         
         with col3:
-            if not anomalies.empty and 'is_anomaly' in anomalies.columns:
-                st.metric("Anomalies", int(anomaly_count))
+            st.metric(
+                label="7-Day High",
+                value=f"{metrics.get('week_high', 0):.0f}"
+            )
         
         with col4:
-            if not forecasts.empty:
-                next_day = forecasts.iloc[0]['forecast'] if len(forecasts) > 0 else 0
-                st.metric("Tomorrow", int(next_day))
+            st.metric(
+                label="Top Alert Type",
+                value=metrics.get('top_alert_type', 'None')
+            )
         
-        # Charts
+        # Charts section
+        st.subheader("Alert Trends and Anomalies")
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            timeline_chart = create_timeline_chart(daily_stats, anomalies)
-            if timeline_chart:
-                st.plotly_chart(timeline_chart, use_container_width=True)
+            fig_trend = self.create_alert_trend_chart(daily_df, anomaly_df)
+            st.plotly_chart(fig_trend, use_container_width=True)
         
         with col2:
-            forecast_chart = create_forecast_chart(forecasts)
-            if forecast_chart:
-                st.plotly_chart(forecast_chart, use_container_width=True)
-    
-    with tab2:
-        # Anomalies tab
-        if not anomalies.empty and 'is_anomaly' in anomalies.columns:
-            anomaly_data = anomalies[anomalies['is_anomaly']]
+            fig_types = self.create_alert_type_chart(daily_df)
+            st.plotly_chart(fig_types, use_container_width=True)
+        
+        # Forecast section
+        st.subheader("Alert Forecast")
+        
+        if forecast_df is not None and not forecast_df.empty:
+            col1, col2 = st.columns([2, 1])
             
-            if not anomaly_data.empty:
-                st.dataframe(anomaly_data[['total_alerts', 'anomaly_score']], use_container_width=True)
+            with col1:
+                fig_forecast = self.create_forecast_chart(daily_df, forecast_df)
+                st.plotly_chart(fig_forecast, use_container_width=True)
+            
+            with col2:
+                st.markdown("#### Forecast Details")
+                for _, row in forecast_df.iterrows():
+                    st.write(f"**{row['date'].strftime('%a, %b %d')}**: {int(row['predicted_alerts'])} alerts")
+                    st.progress(min(row['predicted_alerts'] / 50, 1.0))
+        else:
+            st.info("Forecast data not available. More historical data is needed for accurate forecasting.")
+        
+        # Insights section
+        st.subheader("Plain-English Insights")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Anomaly Detection Insights")
+            if anomaly_insights:
+                insight_text = anomaly_insights.get('summary', 'No insights available.')
+                st.write(insight_text)
+                
+                if anomaly_insights.get('key_anomalies'):
+                    st.markdown("**Recent Anomalies:**")
+                    for anomaly in anomaly_insights['key_anomalies'][:3]:
+                        st.write(f"- {anomaly.get('date')}: {anomaly.get('reason')}")
+                
+                if anomaly_insights.get('recommendations'):
+                    st.markdown("**Recommendations:**")
+                    for rec in anomaly_insights['recommendations']:
+                        st.write(f"- {rec}")
             else:
-                st.info("No anomalies detected")
+                st.info("Anomaly insights will appear here after analysis.")
+        
+        with col2:
+            st.markdown("#### Forecast Insights")
+            if forecast_insights:
+                insight_text = forecast_insights.get('summary', 'No forecast insights available.')
+                st.write(insight_text)
+                
+                if forecast_insights.get('recommendations'):
+                    st.markdown("**Recommendations:**")
+                    for rec in forecast_insights['recommendations']:
+                        st.write(f"- {rec}")
+            else:
+                st.info("Forecast insights will appear here after analysis.")
+        
+        # Recent alerts table
+        st.subheader("Recent Weather Alerts")
+        
+        if raw_alerts is not None and not raw_alerts.empty:
+            # Filter options
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                alert_types = ['All'] + sorted(raw_alerts['alert_type'].unique().tolist())
+                selected_type = st.selectbox("Filter by Alert Type", alert_types)
+            
+            with col2:
+                regions = ['All'] + sorted(raw_alerts['region'].unique().tolist())
+                selected_region = st.selectbox("Filter by Region", regions)
+            
+            with col3:
+                date_range = st.date_input(
+                    "Date Range",
+                    value=(datetime.now().date() - timedelta(days=3), datetime.now().date()),
+                    max_value=datetime.now().date()
+                )
+            
+            # Apply filters
+            filtered_df = raw_alerts.copy()
+            
+            if selected_type != 'All':
+                filtered_df = filtered_df[filtered_df['alert_type'] == selected_type]
+            
+            if selected_region != 'All':
+                filtered_df = filtered_df[filtered_df['region'] == selected_region]
+            
+            if isinstance(date_range, tuple) and len(date_range) == 2:
+                start_date, end_date = date_range
+                filtered_df = filtered_df[
+                    (filtered_df['scraped_at'].dt.date >= start_date) &
+                    (filtered_df['scraped_at'].dt.date <= end_date)
+                ]
+            
+            # Display table
+            display_cols = ['scraped_at', 'alert_type', 'region', 'title', 'severity']
+            display_cols = [col for col in display_cols if col in filtered_df.columns]
+            
+            st.dataframe(
+                filtered_df[display_cols].sort_values('scraped_at', ascending=False),
+                use_container_width=True,
+                height=400
+            )
+            
+            # Export option
+            if st.button("Export Filtered Data"):
+                csv = filtered_df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name="filtered_alerts.csv",
+                    mime="text/csv"
+                )
         else:
-            st.info("Run anomaly detection first")
-    
-    with tab3:
-        # Forecasts tab
-        if not forecasts.empty:
-            st.dataframe(forecasts, use_container_width=True)
-        else:
-            st.info("Run forecasting first")
-    
-    with tab4:
-        # Data tab
-        if not alerts.empty:
-            st.dataframe(alerts.head(20), use_container_width=True)
-        else:
-            st.info("No alert data available")
-    
-    # Footer
-    st.markdown("---")
-    st.caption(f"Weather Anomaly Detection System | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            st.info("No recent alerts available. Data collection may be in progress.")
+        
+        # Sidebar controls
+        with st.sidebar:
+            st.markdown("### Dashboard Controls")
+            
+            # Data freshness indicator
+            st.markdown("#### Data Status")
+            if daily_df is not None:
+                latest_date = daily_df['date'].max()
+                days_old = (datetime.now().date() - latest_date.date()).days
+                
+                if days_old == 0:
+                    st.success("Data is current (today)")
+                elif days_old == 1:
+                    st.info("Data is from yesterday")
+                elif days_old <= 3:
+                    st.warning(f"Data is {days_old} days old")
+                else:
+                    st.error(f"Data is {days_old} days old - may need update")
+            
+            # Manual refresh
+            if st.button("Force Refresh Data", type="secondary"):
+                st.cache_data.clear()
+                st.rerun()
+            
+            st.markdown("---")
+            st.markdown("### About")
+            st.markdown("""
+            This dashboard provides:
+            
+            - Real-time weather alert monitoring
+            - Anomaly detection using ML
+            - 7-day alert forecasts
+            - Plain-English insights
+            
+            Data source: National Weather Service
+            Update frequency: Hourly
+            """)
+
+def main():
+    """Main function to run the dashboard."""
+    dashboard = WeatherDashboard()
+    dashboard.run()
 
 if __name__ == "__main__":
     main()
