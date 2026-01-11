@@ -20,23 +20,12 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / 'src'))
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/backend_pipeline.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
 # ============================================================================
-# DIRECTORY MANAGEMENT
+# DIRECTORY MANAGEMENT - FIRST THING!
 # ============================================================================
 
 def ensure_directories():
-    """Create all required directories."""
+    """Create all required directories - MUST BE CALLED FIRST!"""
     directories = [
         "data/raw",
         "data/processed", 
@@ -48,9 +37,28 @@ def ensure_directories():
     
     for directory in directories:
         os.makedirs(directory, exist_ok=True)
-        logger.info(f"Ensured directory: {directory}")
     
     return True
+
+# CREATE DIRECTORIES IMMEDIATELY
+ensure_directories()
+
+# ============================================================================
+# LOGGING SETUP - AFTER DIRECTORIES CREATED
+# ============================================================================
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/backend_pipeline.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+logger.info("Weather Anomaly Detection System initialized")
 
 # ============================================================================
 # BACKEND PIPELINE FUNCTIONS
@@ -180,26 +188,6 @@ def run_forecasting() -> bool:
         logger.error(f"Forecasting pipeline failed: {str(e)}", exc_info=True)
         return False
 
-def run_initial_data_collection() -> bool:
-    """Run initial data collection script."""
-    logger.info("Running initial data collection")
-    
-    try:
-        from scripts.initial_data_collection import collect_historical_data
-        
-        data = collect_historical_data(days_back=7)
-        
-        if data is None or data.empty:
-            logger.warning("Initial data collection returned empty")
-            return False
-        
-        logger.info(f"Initial data collection completed: {len(data)} records")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Initial data collection failed: {str(e)}")
-        return False
-
 # ============================================================================
 # PIPELINE ORCHESTRATION
 # ============================================================================
@@ -211,9 +199,6 @@ def run_complete_pipeline() -> bool:
     logger.info("=" * 70)
     
     start_time = datetime.now()
-    
-    # Ensure directories
-    ensure_directories()
     
     # Pipeline steps
     pipeline_steps = [
@@ -257,28 +242,6 @@ def run_complete_pipeline() -> bool:
     logger.info(f"Start Time: {start_time}")
     logger.info(f"End Time: {datetime.now()}")
     
-    # Check system files
-    logger.info("\nSYSTEM STATUS CHECK:")
-    system_files = [
-        ("Raw Data", "data/raw/weather_alerts_raw.csv"),
-        ("Processed Data", "data/processed/weather_alerts_daily.csv"),
-        ("Anomaly Results", "data/output/anomaly_results.csv"),
-        ("Forecast Results", "data/output/forecast_results.csv")
-    ]
-    
-    for file_name, file_path in system_files:
-        if os.path.exists(file_path):
-            try:
-                import pandas as pd
-                df = pd.read_csv(file_path)
-                logger.info(f"✓ {file_name}: {len(df)} records")
-            except:
-                logger.info(f"✓ {file_name}: EXISTS")
-        else:
-            logger.warning(f"✗ {file_name}: MISSING")
-    
-    logger.info("=" * 70)
-    
     return successful_steps >= 2  # At least 50% success
 
 # ============================================================================
@@ -297,27 +260,16 @@ Examples:
   python main.py preprocess   # Run only preprocessing
   python main.py anomaly      # Run only anomaly detection
   python main.py forecast     # Run only forecasting
-  python main.py init         # Run initial data collection
         """
     )
     
     parser.add_argument(
         'command',
-        choices=['all', 'scrape', 'preprocess', 'anomaly', 'forecast', 'init', 'status'],
+        choices=['all', 'scrape', 'preprocess', 'anomaly', 'forecast'],
         help='Pipeline command to execute'
     )
     
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose logging'
-    )
-    
     args = parser.parse_args()
-    
-    # Set logging level
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
     
     # Execute command
     command_map = {
@@ -325,75 +277,14 @@ Examples:
         'scrape': run_scraping,
         'preprocess': run_preprocessing,
         'anomaly': run_anomaly_detection,
-        'forecast': run_forecasting,
-        'init': run_initial_data_collection,
-        'status': lambda: True  # Placeholder
+        'forecast': run_forecasting
     }
-    
-    if args.command == 'status':
-        print_system_status()
-        return
     
     # Run the selected command
     success = command_map[args.command]()
     
     # Exit code
     sys.exit(0 if success else 1)
-
-def print_system_status():
-    """Print system status."""
-    print("\n" + "="*70)
-    print("WEATHER ANOMALY DETECTION SYSTEM - STATUS")
-    print("="*70)
-    
-    # Check directories
-    print("\nDIRECTORIES:")
-    dirs = ["data/raw", "data/processed", "data/output", "models", "logs"]
-    for d in dirs:
-        exists = os.path.exists(d)
-        print(f"  {'✓' if exists else '✗'} {d}")
-    
-    # Check files
-    print("\nDATA FILES:")
-    files = [
-        ("Raw Alerts", "data/raw/weather_alerts_raw.csv"),
-        ("Daily Stats", "data/processed/weather_alerts_daily.csv"),
-        ("Anomalies", "data/output/anomaly_results.csv"),
-        ("Forecasts", "data/output/forecast_results.csv"),
-        ("Anomaly Model", "models/isolation_forest.pkl"),
-        ("Forecast Model", "models/xgboost_forecast.pkl")
-    ]
-    
-    for name, path in files:
-        if os.path.exists(path):
-            try:
-                import pandas as pd
-                df = pd.read_csv(path)
-                size = os.path.getsize(path) / 1024  # KB
-                print(f"  ✓ {name}: {len(df)} records ({size:.1f} KB)")
-            except:
-                print(f"  ✓ {name}: EXISTS")
-        else:
-            print(f"  ✗ {name}: MISSING")
-    
-    # Module check
-    print("\nMODULES:")
-    modules = [
-        ("Scraping", "scraping.scrape_weather_alerts"),
-        ("Preprocessing", "preprocessing.preprocess_text"),
-        ("Anomaly Detection", "ml.anomaly_detection"),
-        ("Forecasting", "ml.forecast_model")
-    ]
-    
-    for name, module_path in modules:
-        try:
-            __import__(module_path)
-            print(f"  ✓ {name}: AVAILABLE")
-        except ImportError:
-            print(f"  ✗ {name}: UNAVAILABLE")
-    
-    print("\n" + "="*70)
-    print("Status check completed")
 
 # ============================================================================
 # ENTRY POINT
@@ -403,8 +294,8 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        logger.info("Pipeline interrupted by user")
+        print("\nPipeline interrupted by user")
         sys.exit(130)
     except Exception as e:
-        logger.critical(f"Fatal error in main execution: {str(e)}", exc_info=True)
+        print(f"Fatal error: {str(e)}")
         sys.exit(1)
