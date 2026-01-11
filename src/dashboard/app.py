@@ -1,309 +1,481 @@
-#!/usr/bin/env python3
-"""
-Main entry point for Weather Anomaly Detection System
-Direct and simple solution
-"""
+src/ml/anomaly_detection.py
 
+
+"""
+Anomaly detection module for weather alerts.
+Uses Isolation Forest to detect unusual patterns.
+"""
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import joblib
+from datetime import datetime, timedelta
+import logging
+from typing import Dict, Tuple, List
+import warnings
 import os
-import sys
-import subprocess
-from pathlib import Path
+import json
+warnings.filterwarnings('ignore')
 
-# Add src to Python path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
-sys.path.insert(0, str(project_root / 'src'))
+logger = logging.getLogger(__name__)
 
-def ensure_directories():
-    """Create required directories."""
-    dirs = [
-        "data/raw",
-        "data/processed",
-        "data/output",
-        "models",
-        "logs"
-    ]
+class AnomalyDetector:
+    """Detect anomalies in weather alert patterns."""
     
-    for dir_path in dirs:
-        os.makedirs(dir_path, exist_ok=True)
-    
-    print("Created project directories")
-    return True
-
-def run_scraping():
-    """Run scraping from weather.gov."""
-    print("Running weather.gov scraping...")
-    
-    try:
-        # Import the scraping module
-        try:
-            from scraping.scrape_weather_alerts import main as scrape_main
-        except ImportError:
-            print("Error: Could not import scraping module")
-            print("Make sure src/scraping/scrape_weather_alerts.py exists")
-            return False
+    def __init__(self, contamination=0.1, random_state=42):
+        """
+        Initialize anomaly detector.
         
-        # Run scraping
-        alert_count = scrape_main()
-        
-        # FIX: Check if alert_count is None
-        if alert_count is None:
-            print("Warning: Scraping returned None, treating as 0")
-            alert_count = 0
-        
-        print(f"Scraping completed: {alert_count} alerts collected")
-        return True
-        
-    except Exception as e:
-        print(f"Scraping error: {e}")
-        return False
-
-def run_preprocessing():
-    """Run data preprocessing."""
-    print("Running data preprocessing...")
-    
-    try:
-        # Check if raw data exists
-        if not os.path.exists("data/raw/weather_alerts_raw.csv"):
-            print("Error: No raw data found. Run scraping first.")
-            return False
-        
-        # Import preprocessing module
-        try:
-            from preprocessing.preprocess_text import preprocess_pipeline
-        except ImportError:
-            print("Error: Could not import preprocessing module")
-            return False
-        
-        # Run preprocessing
-        processed_df, daily_df = preprocess_pipeline(
-            "data/raw/weather_alerts_raw.csv",
-            "data/processed/weather_alerts_processed.csv"
+        Args:
+            contamination: Expected proportion of outliers in the data
+            random_state: Random seed for reproducibility
+        """
+        self.contamination = contamination
+        self.random_state = random_state
+        self.model = IsolationForest(
+            contamination=contamination,
+            random_state=random_state,
+            n_estimators=100,
+            max_samples='auto'
         )
+        self.scaler = StandardScaler()
+        self.pca = PCA(n_components=0.95)  # Keep 95% variance
+        self.feature_columns = None
+        self.is_fitted = False
         
-        if processed_df is not None:
-            print(f"Preprocessing completed: {len(processed_df)} alerts processed")
-            return True
-        else:
-            print("Warning: Preprocessing returned None")
-            return True
-            
-    except Exception as e:
-        print(f"Preprocessing error: {e}")
-        return False
-
-def run_anomaly_detection():
-    """Run anomaly detection."""
-    print("Running anomaly detection...")
-    
-    try:
-        # Check if processed data exists
-        if not os.path.exists("data/processed/weather_alerts_daily.csv"):
-            print("Error: No processed data found. Run preprocessing first.")
-            return False
+    def prepare_features(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+        """Prepare features for anomaly detection."""
+        if df.empty or len(df) < 2:
+            return pd.DataFrame(), []
         
-        # Import anomaly detection module
-        try:
-            from ml.anomaly_detection import run_anomaly_detection
-        except ImportError:
-            print("Error: Could not import anomaly detection module")
-            return False
+        # Make a copy
+        features_df = df.copy()
         
-        # Run anomaly detection
-        run_anomaly_detection(
-            "data/processed/weather_alerts_daily.csv",
-            "data/output/anomaly_results.csv",
-            "models/isolation_forest.pkl"
-        )
-        
-        print("Anomaly detection completed")
-        return True
-        
-    except Exception as e:
-        print(f"Anomaly detection error: {e}")
-        return False
-
-def run_forecasting():
-    """Run forecasting with error handling."""
-    print("Running forecasting...")
-    
-    try:
-        # Check if processed data exists
-        if not os.path.exists("data/processed/weather_alerts_daily.csv"):
-            print("Error: No processed data found. Run preprocessing first.")
-            return False
-        
-        # Import forecasting module
-        try:
-            from ml.forecast_model import run_forecasting
-        except ImportError:
-            print("Error: Could not import forecasting module")
-            return False
-        
-        # Run forecasting
-        result = run_forecasting(
-            "data/processed/weather_alerts_daily.csv",
-            "data/output/forecast_results.csv",
-            "models/xgboost_forecast.pkl"
-        )
-        
-        # FIX: Handle None return
-        if result is None:
-            print("Warning: Forecasting returned None")
-            return True
-        
-        # Handle tuple return
-        if isinstance(result, tuple):
-            forecast_df, status = result
-        else:
-            forecast_df = result
-        
-        # Check if forecast_df is valid
-        if forecast_df is None:
-            print("Warning: Forecast data is None")
-            return True
-        
-        # Check if it's a DataFrame
-        if not hasattr(forecast_df, '__len__'):
-            print("Warning: Forecast data is not iterable")
-            return True
-        
-        print(f"Forecasting completed: {len(forecast_df)} predictions")
-        return True
-        
-    except Exception as e:
-        print(f"Forecasting error: {e}")
-        return False
-
-def run_dashboard():
-    """Launch the Streamlit dashboard."""
-    print("Launching dashboard...")
-    
-    try:
-        # Check if dashboard exists
-        dashboard_path = project_root / 'src' / 'dashboard' / 'app.py'
-        if not dashboard_path.exists():
-            print(f"Error: Dashboard not found at {dashboard_path}")
-            return False
-        
-        # Run streamlit
-        cmd = [
-            sys.executable, '-m', 'streamlit', 'run',
-            str(dashboard_path),
-            '--server.port', '8501',
-            '--server.headless', 'true'
+        # Select numerical features that might exist
+        possible_features = [
+            'total_alerts',
+            'severity_score',
+            'sentiment_score',
+            'word_count',
+            'alert_intensity',
+            '7_day_avg',
+            '30_day_avg',
+            'day_over_day_change'
         ]
         
-        print(f"Starting dashboard: {' '.join(cmd)}")
-        subprocess.run(cmd)
-        return True
+        # Keep only features that exist in dataframe
+        existing_features = [f for f in possible_features if f in features_df.columns]
         
-    except Exception as e:
-        print(f"Dashboard error: {e}")
-        return False
-
-def run_pipeline():
-    """Run complete pipeline."""
-    print("=" * 60)
-    print("Running Complete Weather Anomaly Detection Pipeline")
-    print("=" * 60)
+        # Add alert type counts if they exist
+        alert_types = [col for col in df.columns if col in [
+            'flood', 'storm', 'wind', 'winter', 'fire', 
+            'heat', 'cold', 'coastal', 'air', 'other'
+        ]]
+        
+        existing_features.extend(alert_types)
+        
+        # If no features found, create some basic ones
+        if not existing_features and 'issued_date' in features_df.columns:
+            # Create basic temporal features
+            features_df['day_of_week'] = pd.to_datetime(features_df['issued_date']).dt.dayofweek
+            features_df['day_of_year'] = pd.to_datetime(features_df['issued_date']).dt.dayofyear
+            existing_features = ['day_of_week', 'day_of_year']
+        
+        # Fill NaN values
+        if existing_features:
+            features_df[existing_features] = features_df[existing_features].fillna(0)
+        
+        # Add temporal features if date column exists
+        if 'issued_date' in features_df.columns:
+            if 'day_of_week' not in existing_features:
+                features_df['day_of_week'] = pd.to_datetime(features_df['issued_date']).dt.dayofweek
+                existing_features.append('day_of_week')
+            
+            if 'day_of_year' not in existing_features:
+                features_df['day_of_year'] = pd.to_datetime(features_df['issued_date']).dt.dayofyear
+                existing_features.append('day_of_year')
+        
+        # Add lag features only if we have enough data
+        if 'total_alerts' in features_df.columns and len(features_df) > 7:
+            for lag in [1, 2, 3, 7]:
+                lag_col = f'total_alerts_lag_{lag}'
+                features_df[lag_col] = features_df['total_alerts'].shift(lag)
+                existing_features.append(lag_col)
+        
+        # Add rolling statistics only if we have enough data
+        if 'total_alerts' in features_df.columns and len(features_df) > 7:
+            features_df['rolling_std_7'] = features_df['total_alerts'].rolling(window=7, min_periods=1).std()
+            features_df['rolling_std_30'] = features_df['total_alerts'].rolling(window=30, min_periods=1).std()
+            
+            # Calculate z-scores
+            features_df['z_score_7'] = (features_df['total_alerts'] - features_df.get('7_day_avg', 0)) / features_df['rolling_std_7'].replace(0, 1)
+            features_df['z_score_30'] = (features_df['total_alerts'] - features_df.get('30_day_avg', 0)) / features_df['rolling_std_30'].replace(0, 1)
+            
+            existing_features.extend(['rolling_std_7', 'rolling_std_30', 'z_score_7', 'z_score_30'])
+        
+        # Remove any remaining NaN values
+        if existing_features:
+            features_df = features_df.dropna(subset=existing_features)
+        
+        self.feature_columns = existing_features
+        return features_df[existing_features] if existing_features else pd.DataFrame(), existing_features
     
-    steps = [
-        ("Scraping", run_scraping),
-        ("Preprocessing", run_preprocessing),
-        ("Anomaly Detection", run_anomaly_detection),
-        ("Forecasting", run_forecasting)
-    ]
+    def fit(self, df: pd.DataFrame):
+        """Fit the anomaly detection model."""
+        try:
+            # Prepare features
+            features_df, feature_cols = self.prepare_features(df)
+            
+            if len(features_df) < 5:  # Reduced minimum threshold
+                logger.warning(f"Insufficient data for fitting model. Have {len(features_df)} samples, need at least 5.")
+                self.is_fitted = False
+                return
+            
+            # Scale features
+            scaled_features = self.scaler.fit_transform(features_df)
+            
+            # Apply PCA for dimensionality reduction
+            pca_features = self.pca.fit_transform(scaled_features)
+            
+            # Fit Isolation Forest
+            self.model.fit(pca_features)
+            self.is_fitted = True
+            
+            logger.info(f"Anomaly detector fitted on {len(features_df)} samples with {len(feature_cols)} features")
+            if hasattr(self.pca, 'explained_variance_ratio_'):
+                logger.info(f"PCA explained variance ratio: {sum(self.pca.explained_variance_ratio_):.2%}")
+            
+        except Exception as e:
+            logger.error(f"Error fitting anomaly detector: {str(e)}")
+            self.is_fitted = False
     
-    results = []
-    
-    for step_name, step_func in steps:
-        print(f"\n{step_name}:")
-        print("-" * 40)
+    def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Predict anomalies in the data."""
+        # Always return a result, even if model isn't fitted
+        result_df = df.copy()
+        
+        if not self.is_fitted:
+            logger.warning("Model not fitted. Returning default (no anomalies).")
+            result_df['anomaly_score'] = 0
+            result_df['is_anomaly'] = False
+            result_df['anomaly_confidence'] = 0
+            result_df['anomaly_severity'] = 'low'
+            return result_df
         
         try:
-            success = step_func()
-            results.append(success)
+            # Prepare features
+            features_df, _ = self.prepare_features(df)
             
-            if success:
-                print(f"✓ {step_name} completed")
-            else:
-                print(f"✗ {step_name} failed")
-                
+            if features_df.empty:
+                result_df['anomaly_score'] = 0
+                result_df['is_anomaly'] = False
+                result_df['anomaly_confidence'] = 0
+                result_df['anomaly_severity'] = 'low'
+                return result_df
+            
+            # Scale features
+            scaled_features = self.scaler.transform(features_df)
+            
+            # Apply PCA
+            pca_features = self.pca.transform(scaled_features)
+            
+            # Predict anomalies
+            predictions = self.model.predict(pca_features)
+            scores = self.model.decision_function(pca_features)
+            
+            # Convert predictions (1 = normal, -1 = anomaly)
+            is_anomaly = predictions == -1
+            
+            # Add results to dataframe
+            result_df = df.copy()
+            
+            # Initialize with default values
+            result_df['anomaly_score'] = 0
+            result_df['is_anomaly'] = False
+            result_df['anomaly_confidence'] = 0
+            result_df['anomaly_severity'] = 'low'
+            
+            # Fill in actual predictions for rows that have them
+            if len(is_anomaly) > 0:
+                # Align predictions with dataframe
+                start_idx = len(result_df) - len(is_anomaly)
+                if start_idx >= 0:
+                    result_df.iloc[start_idx:, result_df.columns.get_loc('anomaly_score')] = scores
+                    result_df.iloc[start_idx:, result_df.columns.get_loc('is_anomaly')] = is_anomaly
+                    result_df.iloc[start_idx:, result_df.columns.get_loc('anomaly_confidence')] = np.abs(scores)
+                    
+                    # Classify anomaly severity
+                    confidence_values = result_df['anomaly_confidence'].copy()
+                    severity = pd.cut(
+                        confidence_values,
+                        bins=[-np.inf, 0.1, 0.3, 0.5, np.inf],
+                        labels=['low', 'medium', 'high', 'critical'],
+                        include_lowest=True
+                    )
+                    result_df['anomaly_severity'] = severity
+            
+            return result_df
+            
         except Exception as e:
-            print(f"✗ {step_name} error: {e}")
-            results.append(False)
+            logger.error(f"Error during prediction: {str(e)}. Returning default results.")
+            result_df['anomaly_score'] = 0
+            result_df['is_anomaly'] = False
+            result_df['anomaly_confidence'] = 0
+            result_df['anomaly_severity'] = 'low'
+            return result_df
     
-    print("\n" + "=" * 60)
-    successful = sum(results)
-    
-    if successful == len(steps):
-        print("✓ All pipeline steps completed successfully!")
-    elif successful >= len(steps) // 2:
-        print(f"⚠ {successful}/{len(steps)} steps completed")
-    else:
-        print(f"✗ Only {successful}/{len(steps)} steps completed")
-    
-    print("=" * 60)
-    return successful
-
-def main():
-    """Main entry point."""
-    # Create directories first
-    ensure_directories()
-    
-    print("=" * 60)
-    print("WEATHER ANOMALY DETECTION SYSTEM")
-    print("=" * 60)
-    
-    # Show menu
-    print("\nSelect an option:")
-    print("1. Run Dashboard")
-    print("2. Run Complete Pipeline")
-    print("3. Run Scraping (weather.gov)")
-    print("4. Run Preprocessing")
-    print("5. Run Anomaly Detection")
-    print("6. Run Forecasting")
-    print("7. Exit")
-    
-    try:
-        choice = input("\nEnter choice (1-7): ").strip()
+    def explain_anomalies(self, df: pd.DataFrame) -> Dict:
+        """Generate explanations for detected anomalies."""
+        explanations = {"message": "No anomalies detected", "anomalies": {}}
         
-        if choice == "1":
-            run_dashboard()
-        elif choice == "2":
-            run_pipeline()
-            input("\nPress Enter to continue...")
-            main()
-        elif choice == "3":
-            run_scraping()
-            input("\nPress Enter to continue...")
-            main()
-        elif choice == "4":
-            run_preprocessing()
-            input("\nPress Enter to continue...")
-            main()
-        elif choice == "5":
-            run_anomaly_detection()
-            input("\nPress Enter to continue...")
-            main()
-        elif choice == "6":
-            run_forecasting()
-            input("\nPress Enter to continue...")
-            main()
-        elif choice == "7":
-            print("Exiting...")
-            return 0
-        else:
-            print("Invalid choice")
-            input("\nPress Enter to continue...")
-            main()
+        if df.empty or 'is_anomaly' not in df.columns:
+            return explanations
+        
+        anomalies = df[df['is_anomaly'] == True]
+        
+        if anomalies.empty:
+            return explanations
+        
+        explanations["message"] = f"Found {len(anomalies)} anomalies"
+        
+        for idx, row in anomalies.iterrows():
+            # Safely get date
+            try:
+                if isinstance(row.get('issued_date'), pd.Timestamp):
+                    date_str = row['issued_date'].strftime('%Y-%m-%d')
+                elif 'date' in row:
+                    date_str = str(row['date'])
+                else:
+                    date_str = f"row_{idx}"
+            except:
+                date_str = f"row_{idx}"
             
-    except KeyboardInterrupt:
-        print("\n\nExiting...")
-        return 0
+            explanation = {
+                'date': date_str,
+                'total_alerts': int(row.get('total_alerts', 0)),
+                'severity': str(row.get('anomaly_severity', 'unknown')),
+                'confidence': float(row.get('anomaly_confidence', 0)),
+                'reasons': []
+            }
+            
+            # Compare with historical averages
+            if '7_day_avg' in row and not pd.isna(row['7_day_avg']) and row['7_day_avg'] > 0:
+                deviation = ((row.get('total_alerts', 0) - row['7_day_avg']) / row['7_day_avg']) * 100
+                if abs(deviation) > 50:
+                    explanation['reasons'].append(
+                        f"{'Above' if deviation > 0 else 'Below'} 7-day average by {abs(deviation):.1f}%"
+                    )
+            
+            # Check specific alert types
+            alert_type_cols = [col for col in ['flood', 'storm', 'wind', 'winter', 'fire', 'heat', 'cold'] 
+                             if col in row and pd.notna(row[col]) and row[col] > 0]
+            
+            if alert_type_cols:
+                # Find the alert type with maximum value
+                max_val = 0
+                main_type = ''
+                for col in alert_type_cols:
+                    if row[col] > max_val:
+                        max_val = row[col]
+                        main_type = col
+                if main_type:
+                    explanation['reasons'].append(f"High number of {main_type} alerts")
+            
+            # Check severity score
+            if 'severity_score' in row and pd.notna(row['severity_score']) and row['severity_score'] > 0.7:
+                explanation['reasons'].append("High average alert severity")
+            
+            explanations["anomalies"][date_str] = explanation
+        
+        return explanations
     
-    return 0
+    def save_model(self, filepath: str):
+        """Save the trained model."""
+        if not self.is_fitted:
+            logger.warning("Model not fitted. Nothing to save.")
+            return
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        model_data = {
+            'model': self.model,
+            'scaler': self.scaler,
+            'pca': self.pca,
+            'feature_columns': self.feature_columns,
+            'contamination': self.contamination,
+            'random_state': self.random_state,
+            'is_fitted': self.is_fitted
+        }
+        
+        joblib.dump(model_data, filepath)
+        logger.info(f"Model saved to {filepath}")
+    
+    def load_model(self, filepath: str):
+        """Load a trained model."""
+        try:
+            if not os.path.exists(filepath):
+                logger.warning(f"Model file not found: {filepath}")
+                return
+            
+            model_data = joblib.load(filepath)
+            
+            self.model = model_data['model']
+            self.scaler = model_data['scaler']
+            self.pca = model_data['pca']
+            self.feature_columns = model_data.get('feature_columns', [])
+            self.contamination = model_data.get('contamination', 0.1)
+            self.random_state = model_data.get('random_state', 42)
+            self.is_fitted = model_data.get('is_fitted', True)
+            
+            logger.info(f"Model loaded from {filepath}")
+            
+        except Exception as e:
+            logger.error(f"Error loading model: {str(e)}")
+            self.is_fitted = False
+
+def run_anomaly_detection(input_path: str, output_path: str, model_path: str = None):
+    """Complete anomaly detection pipeline."""
+    try:
+        # Load processed data
+        if not os.path.exists(input_path):
+            logger.error(f"Input file not found: {input_path}")
+            # Create a simple default result
+            result_df = pd.DataFrame({
+                'date': [datetime.now().strftime('%Y-%m-%d')],
+                'total_alerts': [0],
+                'anomaly_score': [0],
+                'is_anomaly': [False],
+                'anomaly_confidence': [0],
+                'anomaly_severity': ['low']
+            })
+            result_df.to_csv(output_path, index=False)
+            return result_df, {"message": "No data available"}
+        
+        df = pd.read_csv(input_path)
+        
+        # Check if dataframe is empty
+        if df.empty:
+            logger.warning("Input dataframe is empty")
+            df = pd.DataFrame({
+                'date': [datetime.now().strftime('%Y-%m-%d')],
+                'total_alerts': [0]
+            })
+        
+        # Convert date column
+        date_column = None
+        for col in ['issued_date', 'date', 'timestamp']:
+            if col in df.columns:
+                date_column = col
+                break
+        
+        if date_column:
+            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+            # Fill NaT with current date
+            df[date_column] = df[date_column].fillna(pd.Timestamp.now())
+        
+        logger.info(f"Loaded {len(df)} days of data for anomaly detection")
+        
+        # Initialize detector
+        detector = AnomalyDetector(contamination=0.1)
+        
+        # Load or train model
+        model_loaded = False
+        if model_path and os.path.exists(model_path):
+            try:
+                detector.load_model(model_path)
+                model_loaded = detector.is_fitted
+                if model_loaded:
+                    logger.info("Successfully loaded pre-trained model")
+            except Exception as e:
+                logger.warning(f"Could not load model from {model_path}: {e}")
+        
+        # If model not loaded and we have enough data, try to train
+        if not detector.is_fitted and len(df) >= 5:
+            logger.info("Training new anomaly detection model...")
+            try:
+                detector.fit(df)
+                if detector.is_fitted and model_path:
+                    detector.save_model(model_path)
+                    logger.info(f"Model trained and saved to {model_path}")
+            except Exception as e:
+                logger.warning(f"Could not train model: {e}")
+        
+        # Detect anomalies (this will work even if model isn't fitted)
+        result_df = detector.predict(df)
+        
+        # Ensure required columns exist
+        required_columns = ['anomaly_score', 'is_anomaly', 'anomaly_confidence', 'anomaly_severity']
+        for col in required_columns:
+            if col not in result_df.columns:
+                result_df[col] = 0 if col != 'anomaly_severity' else 'low'
+                if col == 'is_anomaly':
+                    result_df[col] = False
+        
+        # Generate explanations
+        explanations = detector.explain_anomalies(result_df)
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Save results
+        result_df.to_csv(output_path, index=False)
+        
+        # Save explanations as JSON if we have any
+        if explanations and explanations.get("anomalies"):
+            explanations_path = output_path.replace('.csv', '_explanations.json')
+            with open(explanations_path, 'w') as f:
+                json.dump(explanations, f, indent=2)
+            logger.info(f"Explanations saved to {explanations_path}")
+        
+        # Safely count anomalies
+        anomaly_count = 0
+        if 'is_anomaly' in result_df.columns:
+            anomaly_count = result_df['is_anomaly'].sum()
+        
+        logger.info(f"Anomaly detection complete. Found {anomaly_count} anomalies")
+        logger.info(f"Results saved to {output_path}")
+        
+        return result_df, explanations
+        
+    except Exception as e:
+        logger.error(f"Anomaly detection pipeline failed: {str(e)}")
+        # Create a default result to prevent complete failure
+        try:
+            result_df = pd.DataFrame({
+                'date': [datetime.now().strftime('%Y-%m-%d')],
+                'total_alerts': [0],
+                'anomaly_score': [0],
+                'is_anomaly': [False],
+                'anomaly_confidence': [0],
+                'anomaly_severity': ['low']
+            })
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            result_df.to_csv(output_path, index=False)
+            return result_df, {"message": f"Pipeline failed: {str(e)}"}
+        except:
+            # Last resort
+            return pd.DataFrame(), {"message": "Complete pipeline failure"}
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Example usage
+    input_file = "data/processed/weather_alerts_daily.csv"
+    output_file = "data/output/anomaly_results.csv"
+    model_file = "models/isolation_forest.pkl"
+    
+    # Create directories if they don't exist
+    os.makedirs("data/output", exist_ok=True)
+    os.makedirs("models", exist_ok=True)
+    
+    result_df, explanations = run_anomaly_detection(input_file, output_file, model_file)
+    print(f"Processed {len(result_df)} records")
+    print(f"Found {result_df['is_anomaly'].sum()} anomalies")
+
