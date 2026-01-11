@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """
-Weather Anomaly Detection - Streamlit Cloud Compatible
-Direct connection to all backend modules
+Weather Anomaly Detection System - Professional Dashboard
+No emojis, clean professional interface
 """
 
 import os
 import sys
 import streamlit as st
 from pathlib import Path
+import pandas as pd
+from datetime import datetime
 
 # ============================================================================
-# SETUP - FIRST THING!
+# SETUP
 # ============================================================================
 
-# Create ALL directories immediately
+# Create directories
 os.makedirs("data/raw", exist_ok=True)
 os.makedirs("data/processed", exist_ok=True)
 os.makedirs("data/output", exist_ok=True)
 os.makedirs("models", exist_ok=True)
-os.makedirs("logs", exist_ok=True)
 
 # Add src to path
 PROJECT_ROOT = Path(__file__).parent
@@ -26,46 +27,50 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / 'src'))
 
 # ============================================================================
-# STREAMLIT DASHBOARD
+# STREAMLIT CONFIG
 # ============================================================================
 
 st.set_page_config(
-    page_title="Weather Anomaly Detection",
-    page_icon="🌤️",
-    layout="wide"
+    page_title="Weather Anomaly Detection System",
+    page_icon=None,
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("🌤️ Weather Anomaly Detection System")
-st.markdown("### Live Weather Monitoring & Analysis")
+# Professional CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1E3A8A;
+        margin-bottom: 1rem;
+    }
+    
+    .section-header {
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #111827;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+    }
+    
+    .metric-card {
+        background-color: #F9FAFB;
+        border-radius: 0.75rem;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+        border: 1px solid #E5E7EB;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ============================================================================
 # BACKEND FUNCTIONS
 # ============================================================================
 
-def run_scraping():
-    """Run weather.gov scraping"""
-    with st.spinner("Scraping weather data from weather.gov..."):
-        try:
-            from scraping.scrape_weather_alerts import main as scrape_main
-            alert_count = scrape_main()
-            
-            if alert_count is None or alert_count == 0:
-                # Create sample data if scraping fails
-                create_sample_data()
-                st.warning("Using sample data (scraping returned no data)")
-                return False
-            else:
-                st.success(f"✅ Collected {alert_count} weather alerts")
-                return True
-                
-        except Exception as e:
-            st.error(f"❌ Scraping failed: {str(e)}")
-            create_sample_data()
-            return False
-
 def create_sample_data():
-    """Create sample data if scraping fails"""
-    import pandas as pd
+    """Create sample data for testing"""
     import numpy as np
     from datetime import datetime
     
@@ -76,6 +81,11 @@ def create_sample_data():
     
     for i in range(100):
         alert_date = np.random.choice(dates)
+        if isinstance(alert_date, pd.Timestamp):
+            date_str = alert_date.strftime('%Y-%m-%d')
+        else:
+            date_str = str(alert_date)
+            
         alert_type = np.random.choice(alert_types)
         severity = np.random.choice(['Minor', 'Moderate', 'Severe'], p=[0.5, 0.3, 0.2])
         
@@ -86,15 +96,36 @@ def create_sample_data():
             'severity': severity,
             'alert_type': alert_type,
             'area': np.random.choice(['Northeast', 'Midwest', 'Southwest']),
-            'issued_date': alert_date.strftime('%Y-%m-%d')
+            'issued_date': date_str
         })
     
     df = pd.DataFrame(sample_data)
     df.to_csv('data/raw/weather_alerts_raw.csv', index=False)
+    return True
+
+def run_scraping():
+    """Run web scraping"""
+    with st.spinner("Collecting weather data from sources..."):
+        try:
+            from scraping.scrape_weather_alerts import main as scrape_main
+            alert_count = scrape_main()
+            
+            if alert_count is None or alert_count == 0:
+                create_sample_data()
+                st.warning("Using sample data (scraping returned no data)")
+                return False
+            else:
+                st.success(f"Collected {alert_count} weather alerts")
+                return True
+                
+        except Exception as e:
+            st.error(f"Scraping failed: {str(e)}")
+            create_sample_data()
+            return False
 
 def run_processing():
     """Run data processing"""
-    with st.spinner("Processing weather data..."):
+    with st.spinner("Processing and analyzing weather data..."):
         try:
             from preprocessing.preprocess_text import preprocess_pipeline
             
@@ -104,19 +135,19 @@ def run_processing():
             )
             
             if processed_df is not None:
-                st.success(f"✅ Processed {len(processed_df)} alerts")
+                st.success(f"Processed {len(processed_df)} alerts")
                 return True
             else:
-                st.warning("⚠️ Processing returned no data")
+                st.warning("Processing returned no data")
                 return False
                 
         except Exception as e:
-            st.error(f"❌ Processing failed: {str(e)}")
+            st.error(f"Processing failed: {str(e)}")
             return False
 
 def run_anomaly():
     """Run anomaly detection"""
-    with st.spinner("Detecting anomalies..."):
+    with st.spinner("Analyzing patterns and detecting anomalies..."):
         try:
             from ml.anomaly_detection import run_anomaly_detection
             
@@ -128,19 +159,19 @@ def run_anomaly():
             
             if result_df is not None:
                 anomaly_count = result_df['is_anomaly'].sum() if 'is_anomaly' in result_df.columns else 0
-                st.success(f"✅ Found {anomaly_count} anomalies")
+                st.success(f"Found {anomaly_count} anomalies")
                 return True
             else:
-                st.warning("⚠️ Anomaly detection returned no results")
+                st.warning("Anomaly detection returned no results")
                 return False
                 
         except Exception as e:
-            st.error(f"❌ Anomaly detection failed: {str(e)}")
+            st.error(f"Anomaly detection failed: {str(e)}")
             return False
 
 def run_forecast():
     """Run forecasting"""
-    with st.spinner("Generating forecasts..."):
+    with st.spinner("Generating weather forecasts..."):
         try:
             from ml.forecast_model import run_forecasting
             
@@ -151,25 +182,29 @@ def run_forecast():
             )
             
             if forecast_df is not None:
-                st.success(f"✅ Generated {len(forecast_df)} forecasts")
+                st.success(f"Generated {len(forecast_df)} forecasts")
                 return True
             else:
-                st.warning("⚠️ Forecasting returned no results")
+                st.warning("Forecasting returned no results")
                 return False
                 
         except Exception as e:
-            st.error(f"❌ Forecasting failed: {str(e)}")
+            st.error(f"Forecasting failed: {str(e)}")
             return False
 
 # ============================================================================
-# MAIN DASHBOARD UI
+# DASHBOARD UI
 # ============================================================================
 
-# Sidebar controls
+# Header
+st.markdown('<h1 class="main-header">Weather Anomaly Detection System</h1>', unsafe_allow_html=True)
+st.markdown('<p style="color: #6B7280; font-size: 1.1rem; margin-bottom: 2rem;">Professional weather monitoring and anomaly detection platform</p>', unsafe_allow_html=True)
+
+# Sidebar
 with st.sidebar:
-    st.header("🚀 System Controls")
+    st.markdown('<h3 class="section-header">System Controls</h3>', unsafe_allow_html=True)
     
-    if st.button("▶️ Run Complete Pipeline", type="primary", use_container_width=True):
+    if st.button("Run Complete Analysis Pipeline", type="primary", use_container_width=True):
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -180,28 +215,23 @@ with st.sidebar:
             run_anomaly()
         with col4:
             run_forecast()
-        
-        st.balloons()
     
-    st.divider()
+    st.markdown('<h4 class="section-header">Pipeline Components</h4>', unsafe_allow_html=True)
     
-    st.header("⚙️ Individual Steps")
-    if st.button("🌐 Web Scraping", use_container_width=True):
+    if st.button("Collect Weather Data", use_container_width=True):
         run_scraping()
     
-    if st.button("🔧 Data Processing", use_container_width=True):
+    if st.button("Process & Analyze Data", use_container_width=True):
         run_processing()
     
-    if st.button("🔍 Anomaly Detection", use_container_width=True):
+    if st.button("Detect Anomalies", use_container_width=True):
         run_anomaly()
     
-    if st.button("📈 Forecasting", use_container_width=True):
+    if st.button("Generate Forecasts", use_container_width=True):
         run_forecast()
     
-    st.divider()
-    
     # System status
-    st.header("📊 System Status")
+    st.markdown('<h4 class="section-header">System Status</h4>', unsafe_allow_html=True)
     
     status_items = [
         ("Raw Data", "data/raw/weather_alerts_raw.csv"),
@@ -213,51 +243,81 @@ with st.sidebar:
     for name, path in status_items:
         if os.path.exists(path):
             try:
-                import pandas as pd
                 df = pd.read_csv(path)
-                st.success(f"✓ {name}: {len(df)} records")
+                st.markdown(f"**{name}:** {len(df)} records")
             except:
-                st.info(f"✓ {name}: Ready")
+                st.markdown(f"**{name}:** Available")
         else:
-            st.warning(f"✗ {name}: Not found")
+            st.markdown(f"**{name}:** Not available")
 
-# Main content
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🔍 Anomalies", "📈 Forecasts", "⚙️ Configuration"])
+# Main content tabs
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Dashboard Overview",
+    "Anomaly Analysis", 
+    "Forecasts",
+    "System Configuration"
+])
 
 with tab1:
-    st.header("Weather Alert Dashboard")
+    st.markdown('<h2 class="section-header">Dashboard Overview</h2>', unsafe_allow_html=True)
     
-    # Show data if exists
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
     if os.path.exists("data/processed/weather_alerts_daily.csv"):
-        import pandas as pd
-        import plotly.express as px
-        
         df = pd.read_csv("data/processed/weather_alerts_daily.csv")
         
-        col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Total Days", len(df))
-        with col2:
             if 'total_alerts' in df.columns:
-                st.metric("Total Alerts", int(df['total_alerts'].sum()))
-        with col3:
-            if 'severity_score' in df.columns:
-                st.metric("Avg Severity", f"{df['severity_score'].mean():.2f}")
+                total = df['total_alerts'].sum()
+                st.markdown(f"""
+                <div class="metric-card">
+                    <h3>Total Alerts</h3>
+                    <div style="font-size: 2.25rem; font-weight: 700;">{int(total)}</div>
+                    <div style="font-size: 0.875rem; color: #6B7280;">Across all time periods</div>
+                </div>
+                """, unsafe_allow_html=True)
         
-        # Plot
+        with col2:
+            if 'severity_score' in df.columns:
+                avg = df['severity_score'].mean()
+                st.markdown(f"""
+                <div class="metric-card">
+                    <h3>Average Severity</h3>
+                    <div style="font-size: 2.25rem; font-weight: 700;">{avg:.2f}</div>
+                    <div style="font-size: 0.875rem; color: #6B7280;">0.0 - 1.0 scale</div>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # Charts
+    if os.path.exists("data/processed/weather_alerts_daily.csv"):
+        df = pd.read_csv("data/processed/weather_alerts_daily.csv")
+        
         if 'total_alerts' in df.columns and 'issued_date' in df.columns:
-            fig = px.line(df, x='issued_date', y='total_alerts', 
-                         title="Daily Weather Alerts")
+            import plotly.graph_objects as go
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df['issued_date'],
+                y=df['total_alerts'],
+                mode='lines',
+                name='Total Alerts',
+                line=dict(color='#3B82F6', width=3)
+            ))
+            
+            fig.update_layout(
+                title='Daily Weather Alert Trends',
+                xaxis_title='Date',
+                yaxis_title='Number of Alerts',
+                height=400
+            )
+            
             st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No data available. Run the pipeline first.")
 
 with tab2:
-    st.header("Anomaly Detection")
+    st.markdown('<h2 class="section-header">Anomaly Analysis</h2>', unsafe_allow_html=True)
     
     if os.path.exists("data/output/anomaly_results.csv"):
-        import pandas as pd
-        
         df = pd.read_csv("data/output/anomaly_results.csv")
         
         if 'is_anomaly' in df.columns:
@@ -265,51 +325,28 @@ with tab2:
             st.metric("Detected Anomalies", len(anomalies))
             
             if not anomalies.empty:
-                st.dataframe(anomalies.head(10), use_container_width=True)
-        else:
-            st.warning("No anomaly data found")
+                st.dataframe(anomalies, use_container_width=True)
     else:
-        st.info("Run anomaly detection first")
+        st.info("Run anomaly detection to see results")
 
 with tab3:
-    st.header("Weather Forecasts")
+    st.markdown('<h2 class="section-header">Weather Forecasts</h2>', unsafe_allow_html=True)
     
     if os.path.exists("data/output/forecast_results.csv"):
-        import pandas as pd
-        import plotly.express as px
-        
         df = pd.read_csv("data/output/forecast_results.csv")
-        
         st.dataframe(df, use_container_width=True)
-        
-        # Plot forecasts
-        if 'forecast' in df.columns and 'date' in df.columns:
-            fig = px.line(df, x='date', y='forecast', 
-                         title="7-Day Weather Alert Forecast")
-            st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Run forecasting first")
+        st.info("Run forecasting to see predictions")
 
 with tab4:
-    st.header("System Configuration")
+    st.markdown('<h2 class="section-header">System Configuration</h2>', unsafe_allow_html=True)
     
-    st.code(f"""
-    Project Root: {PROJECT_ROOT}
-    Python: {sys.version}
-    
-    Directories:
-    - data/raw: {os.path.exists('data/raw')}
-    - data/processed: {os.path.exists('data/processed')}
-    - data/output: {os.path.exists('data/output')}
-    - models: {os.path.exists('models')}
-    """)
-    
-    # Module check
-    st.subheader("Module Status")
+    # Module status
+    st.markdown('<h4>Module Status</h4>', unsafe_allow_html=True)
     
     modules = [
-        ("Scraping", "scraping.scrape_weather_alerts"),
-        ("Preprocessing", "preprocessing.preprocess_text"),
+        ("Data Collection", "scraping.scrape_weather_alerts"),
+        ("Data Processing", "preprocessing.preprocess_text"),
         ("Anomaly Detection", "ml.anomaly_detection"),
         ("Forecasting", "ml.forecast_model")
     ]
@@ -317,27 +354,38 @@ with tab4:
     for name, module_path in modules:
         try:
             __import__(module_path)
-            st.success(f"✓ {name}: Available")
+            st.success(f"{name}: Available")
         except ImportError:
-            st.error(f"✗ {name}: Not available")
+            st.error(f"{name}: Not available")
+    
+    # System info
+    st.markdown('<h4>System Information</h4>', unsafe_allow_html=True)
+    
+    info_col1, info_col2 = st.columns(2)
+    
+    with info_col1:
+        st.markdown(f"""
+        **Current Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        
+        **Python Version:** {sys.version.split()[0]}
+        
+        **Pandas Version:** {pd.__version__}
+        """)
+    
+    with info_col2:
+        st.markdown(f"""
+        **Streamlit Version:** {st.__version__}
+        
+        **Project Root:** {PROJECT_ROOT}
+        
+        **Data Source:** weather.gov
+        """)
 
 # ============================================================================
-# FOOTER
+# AUTO-INITIALIZATION
 # ============================================================================
 
-st.divider()
-st.markdown("""
-<div style='text-align: center; color: gray;'>
-    <p>Weather Anomaly Detection System | Live Weather Monitoring</p>
-    <p>Data Source: weather.gov | Last Updated: {}</p>
-</div>
-""".format(pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')), unsafe_allow_html=True)
-
-# ============================================================================
-# AUTO-RUN ON STARTUP
-# ============================================================================
-
-# Check if we need to run initial setup
+# Run initial scraping on first load
 if not os.path.exists("data/raw/weather_alerts_raw.csv"):
-    st.info("⚙️ First-time setup: Running initial data collection...")
+    st.info("Initializing system: Collecting weather data...")
     run_scraping()
