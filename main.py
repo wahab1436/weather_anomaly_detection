@@ -1,301 +1,343 @@
 #!/usr/bin/env python3
 """
-WEATHER ANOMALY DETECTION SYSTEM - PRODUCTION ENTRY POINT
-Complete backend pipeline connector
+Weather Anomaly Detection - Streamlit Cloud Compatible
+Direct connection to all backend modules
 """
 
 import os
 import sys
-import argparse
-import logging
-from datetime import datetime
+import streamlit as st
 from pathlib import Path
 
 # ============================================================================
-# CONFIGURATION
+# SETUP - FIRST THING!
 # ============================================================================
 
-# Add src to Python path
+# Create ALL directories immediately
+os.makedirs("data/raw", exist_ok=True)
+os.makedirs("data/processed", exist_ok=True)
+os.makedirs("data/output", exist_ok=True)
+os.makedirs("models", exist_ok=True)
+os.makedirs("logs", exist_ok=True)
+
+# Add src to path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / 'src'))
 
 # ============================================================================
-# DIRECTORY MANAGEMENT - FIRST THING!
+# STREAMLIT DASHBOARD
 # ============================================================================
 
-def ensure_directories():
-    """Create all required directories - MUST BE CALLED FIRST!"""
-    directories = [
-        "data/raw",
-        "data/processed", 
-        "data/output",
-        "models",
-        "logs",
-        "backups"
-    ]
-    
-    for directory in directories:
-        os.makedirs(directory, exist_ok=True)
-    
-    return True
-
-# CREATE DIRECTORIES IMMEDIATELY
-ensure_directories()
-
-# ============================================================================
-# LOGGING SETUP - AFTER DIRECTORIES CREATED
-# ============================================================================
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/backend_pipeline.log'),
-        logging.StreamHandler()
-    ]
+st.set_page_config(
+    page_title="Weather Anomaly Detection",
+    page_icon="🌤️",
+    layout="wide"
 )
-logger = logging.getLogger(__name__)
 
-logger.info("Weather Anomaly Detection System initialized")
+st.title("🌤️ Weather Anomaly Detection System")
+st.markdown("### Live Weather Monitoring & Analysis")
 
 # ============================================================================
-# BACKEND PIPELINE FUNCTIONS
+# BACKEND FUNCTIONS
 # ============================================================================
 
-def run_scraping() -> bool:
-    """Run weather.gov scraping pipeline."""
-    logger.info("STEP 1: Starting weather.gov data collection")
-    
-    try:
-        from scraping.scrape_weather_alerts import main as scrape_main
-        
-        alert_count = scrape_main()
-        
-        if alert_count is None:
-            logger.warning("Scraping returned None, checking for data file")
-            if os.path.exists("data/raw/weather_alerts_raw.csv"):
-                import pandas as pd
-                df = pd.read_csv("data/raw/weather_alerts_raw.csv")
-                alert_count = len(df)
-                logger.info(f"Found existing data: {alert_count} alerts")
-            else:
-                logger.error("No data collected and no existing data found")
+def run_scraping():
+    """Run weather.gov scraping"""
+    with st.spinner("Scraping weather data from weather.gov..."):
+        try:
+            from scraping.scrape_weather_alerts import main as scrape_main
+            alert_count = scrape_main()
+            
+            if alert_count is None or alert_count == 0:
+                # Create sample data if scraping fails
+                create_sample_data()
+                st.warning("Using sample data (scraping returned no data)")
                 return False
-        
-        logger.info(f"Data collection completed: {alert_count} alerts")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Scraping pipeline failed: {str(e)}", exc_info=True)
-        return False
+            else:
+                st.success(f"✅ Collected {alert_count} weather alerts")
+                return True
+                
+        except Exception as e:
+            st.error(f"❌ Scraping failed: {str(e)}")
+            create_sample_data()
+            return False
 
-def run_preprocessing() -> bool:
-    """Run data preprocessing pipeline."""
-    logger.info("STEP 2: Starting data preprocessing")
+def create_sample_data():
+    """Create sample data if scraping fails"""
+    import pandas as pd
+    import numpy as np
+    from datetime import datetime
     
-    try:
-        from preprocessing.preprocess_text import preprocess_pipeline
+    dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
+    
+    sample_data = []
+    alert_types = ['flood', 'storm', 'wind', 'winter']
+    
+    for i in range(100):
+        alert_date = np.random.choice(dates)
+        alert_type = np.random.choice(alert_types)
+        severity = np.random.choice(['Minor', 'Moderate', 'Severe'], p=[0.5, 0.3, 0.2])
         
-        # Check for input data
-        input_file = "data/raw/weather_alerts_raw.csv"
-        if not os.path.exists(input_file):
-            logger.error(f"Raw data not found: {input_file}")
-            return False
-        
-        output_file = "data/processed/weather_alerts_processed.csv"
-        
-        processed_df, daily_df = preprocess_pipeline(input_file, output_file)
-        
-        if processed_df is None or processed_df.empty:
-            logger.warning("Preprocessing returned empty dataframe")
-            return False
-        
-        logger.info(f"Preprocessing completed: {len(processed_df)} alerts, {len(daily_df)} daily records")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Preprocessing pipeline failed: {str(e)}", exc_info=True)
-        return False
+        sample_data.append({
+            'alert_id': f'SAMPLE_{i:04d}',
+            'headline': f'{severity} {alert_type.title()} Warning',
+            'description': f'A {severity.lower()} {alert_type} alert.',
+            'severity': severity,
+            'alert_type': alert_type,
+            'area': np.random.choice(['Northeast', 'Midwest', 'Southwest']),
+            'issued_date': alert_date.strftime('%Y-%m-%d')
+        })
+    
+    df = pd.DataFrame(sample_data)
+    df.to_csv('data/raw/weather_alerts_raw.csv', index=False)
 
-def run_anomaly_detection() -> bool:
-    """Run anomaly detection pipeline."""
-    logger.info("STEP 3: Starting anomaly detection")
-    
-    try:
-        from ml.anomaly_detection import run_anomaly_detection
-        
-        input_file = "data/processed/weather_alerts_daily.csv"
-        if not os.path.exists(input_file):
-            logger.error(f"Processed data not found: {input_file}")
+def run_processing():
+    """Run data processing"""
+    with st.spinner("Processing weather data..."):
+        try:
+            from preprocessing.preprocess_text import preprocess_pipeline
+            
+            processed_df, daily_df = preprocess_pipeline(
+                "data/raw/weather_alerts_raw.csv",
+                "data/processed/weather_alerts_processed.csv"
+            )
+            
+            if processed_df is not None:
+                st.success(f"✅ Processed {len(processed_df)} alerts")
+                return True
+            else:
+                st.warning("⚠️ Processing returned no data")
+                return False
+                
+        except Exception as e:
+            st.error(f"❌ Processing failed: {str(e)}")
             return False
-        
-        output_file = "data/output/anomaly_results.csv"
-        model_file = "models/isolation_forest.pkl"
-        
-        result_df, explanations = run_anomaly_detection(
-            input_file, 
-            output_file, 
-            model_file
-        )
-        
-        if result_df is None or result_df.empty:
-            logger.warning("Anomaly detection returned empty results")
-            return False
-        
-        # Count anomalies
-        anomaly_count = 0
-        if 'is_anomaly' in result_df.columns:
-            anomaly_count = result_df['is_anomaly'].sum()
-        
-        logger.info(f"Anomaly detection completed: {anomaly_count} anomalies detected")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Anomaly detection pipeline failed: {str(e)}", exc_info=True)
-        return False
 
-def run_forecasting() -> bool:
-    """Run forecasting pipeline."""
-    logger.info("STEP 4: Starting forecasting")
-    
-    try:
-        from ml.forecast_model import run_forecasting
-        
-        input_file = "data/processed/weather_alerts_daily.csv"
-        if not os.path.exists(input_file):
-            logger.error(f"Processed data not found: {input_file}")
+def run_anomaly():
+    """Run anomaly detection"""
+    with st.spinner("Detecting anomalies..."):
+        try:
+            from ml.anomaly_detection import run_anomaly_detection
+            
+            result_df, explanations = run_anomaly_detection(
+                "data/processed/weather_alerts_daily.csv",
+                "data/output/anomaly_results.csv",
+                "models/isolation_forest.pkl"
+            )
+            
+            if result_df is not None:
+                anomaly_count = result_df['is_anomaly'].sum() if 'is_anomaly' in result_df.columns else 0
+                st.success(f"✅ Found {anomaly_count} anomalies")
+                return True
+            else:
+                st.warning("⚠️ Anomaly detection returned no results")
+                return False
+                
+        except Exception as e:
+            st.error(f"❌ Anomaly detection failed: {str(e)}")
             return False
-        
-        output_file = "data/output/forecast_results.csv"
-        model_file = "models/xgboost_forecast.pkl"
-        
-        forecast_df, status = run_forecasting(
-            input_file, 
-            output_file, 
-            model_file
-        )
-        
-        if forecast_df is None or forecast_df.empty:
-            logger.warning("Forecasting returned empty results")
+
+def run_forecast():
+    """Run forecasting"""
+    with st.spinner("Generating forecasts..."):
+        try:
+            from ml.forecast_model import run_forecasting
+            
+            forecast_df, status = run_forecasting(
+                "data/processed/weather_alerts_daily.csv",
+                "data/output/forecast_results.csv",
+                "models/xgboost_forecast.pkl"
+            )
+            
+            if forecast_df is not None:
+                st.success(f"✅ Generated {len(forecast_df)} forecasts")
+                return True
+            else:
+                st.warning("⚠️ Forecasting returned no results")
+                return False
+                
+        except Exception as e:
+            st.error(f"❌ Forecasting failed: {str(e)}")
             return False
-        
-        logger.info(f"Forecasting completed: {len(forecast_df)} forecast records")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Forecasting pipeline failed: {str(e)}", exc_info=True)
-        return False
 
 # ============================================================================
-# PIPELINE ORCHESTRATION
+# MAIN DASHBOARD UI
 # ============================================================================
 
-def run_complete_pipeline() -> bool:
-    """Run complete end-to-end pipeline."""
-    logger.info("=" * 70)
-    logger.info("STARTING COMPLETE WEATHER ANOMALY DETECTION PIPELINE")
-    logger.info("=" * 70)
+# Sidebar controls
+with st.sidebar:
+    st.header("🚀 System Controls")
     
-    start_time = datetime.now()
+    if st.button("▶️ Run Complete Pipeline", type="primary", use_container_width=True):
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            run_scraping()
+        with col2:
+            run_processing()
+        with col3:
+            run_anomaly()
+        with col4:
+            run_forecast()
+        
+        st.balloons()
     
-    # Pipeline steps
-    pipeline_steps = [
-        ("Data Collection", run_scraping),
-        ("Data Preprocessing", run_preprocessing),
-        ("Anomaly Detection", run_anomaly_detection),
-        ("Forecasting", run_forecasting)
+    st.divider()
+    
+    st.header("⚙️ Individual Steps")
+    if st.button("🌐 Web Scraping", use_container_width=True):
+        run_scraping()
+    
+    if st.button("🔧 Data Processing", use_container_width=True):
+        run_processing()
+    
+    if st.button("🔍 Anomaly Detection", use_container_width=True):
+        run_anomaly()
+    
+    if st.button("📈 Forecasting", use_container_width=True):
+        run_forecast()
+    
+    st.divider()
+    
+    # System status
+    st.header("📊 System Status")
+    
+    status_items = [
+        ("Raw Data", "data/raw/weather_alerts_raw.csv"),
+        ("Processed Data", "data/processed/weather_alerts_daily.csv"),
+        ("Anomaly Results", "data/output/anomaly_results.csv"),
+        ("Forecast Results", "data/output/forecast_results.csv")
     ]
     
-    results = []
+    for name, path in status_items:
+        if os.path.exists(path):
+            try:
+                import pandas as pd
+                df = pd.read_csv(path)
+                st.success(f"✓ {name}: {len(df)} records")
+            except:
+                st.info(f"✓ {name}: Ready")
+        else:
+            st.warning(f"✗ {name}: Not found")
+
+# Main content
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "🔍 Anomalies", "📈 Forecasts", "⚙️ Configuration"])
+
+with tab1:
+    st.header("Weather Alert Dashboard")
     
-    for step_name, step_function in pipeline_steps:
-        step_start = datetime.now()
-        logger.info(f"\n{'='*40}")
-        logger.info(f"STARTING: {step_name}")
-        logger.info(f"{'='*40}")
+    # Show data if exists
+    if os.path.exists("data/processed/weather_alerts_daily.csv"):
+        import pandas as pd
+        import plotly.express as px
         
+        df = pd.read_csv("data/processed/weather_alerts_daily.csv")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Days", len(df))
+        with col2:
+            if 'total_alerts' in df.columns:
+                st.metric("Total Alerts", int(df['total_alerts'].sum()))
+        with col3:
+            if 'severity_score' in df.columns:
+                st.metric("Avg Severity", f"{df['severity_score'].mean():.2f}")
+        
+        # Plot
+        if 'total_alerts' in df.columns and 'issued_date' in df.columns:
+            fig = px.line(df, x='issued_date', y='total_alerts', 
+                         title="Daily Weather Alerts")
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No data available. Run the pipeline first.")
+
+with tab2:
+    st.header("Anomaly Detection")
+    
+    if os.path.exists("data/output/anomaly_results.csv"):
+        import pandas as pd
+        
+        df = pd.read_csv("data/output/anomaly_results.csv")
+        
+        if 'is_anomaly' in df.columns:
+            anomalies = df[df['is_anomaly'] == True]
+            st.metric("Detected Anomalies", len(anomalies))
+            
+            if not anomalies.empty:
+                st.dataframe(anomalies.head(10), use_container_width=True)
+        else:
+            st.warning("No anomaly data found")
+    else:
+        st.info("Run anomaly detection first")
+
+with tab3:
+    st.header("Weather Forecasts")
+    
+    if os.path.exists("data/output/forecast_results.csv"):
+        import pandas as pd
+        import plotly.express as px
+        
+        df = pd.read_csv("data/output/forecast_results.csv")
+        
+        st.dataframe(df, use_container_width=True)
+        
+        # Plot forecasts
+        if 'forecast' in df.columns and 'date' in df.columns:
+            fig = px.line(df, x='date', y='forecast', 
+                         title="7-Day Weather Alert Forecast")
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Run forecasting first")
+
+with tab4:
+    st.header("System Configuration")
+    
+    st.code(f"""
+    Project Root: {PROJECT_ROOT}
+    Python: {sys.version}
+    
+    Directories:
+    - data/raw: {os.path.exists('data/raw')}
+    - data/processed: {os.path.exists('data/processed')}
+    - data/output: {os.path.exists('data/output')}
+    - models: {os.path.exists('models')}
+    """)
+    
+    # Module check
+    st.subheader("Module Status")
+    
+    modules = [
+        ("Scraping", "scraping.scrape_weather_alerts"),
+        ("Preprocessing", "preprocessing.preprocess_text"),
+        ("Anomaly Detection", "ml.anomaly_detection"),
+        ("Forecasting", "ml.forecast_model")
+    ]
+    
+    for name, module_path in modules:
         try:
-            success = step_function()
-            results.append(success)
-            
-            step_duration = datetime.now() - step_start
-            status = "SUCCESS" if success else "FAILED"
-            logger.info(f"COMPLETED: {step_name} - {status} ({step_duration})")
-            
-        except Exception as e:
-            logger.error(f"STEP FAILED: {step_name} - {str(e)}", exc_info=True)
-            results.append(False)
-    
-    # Calculate statistics
-    total_duration = datetime.now() - start_time
-    successful_steps = sum(results)
-    total_steps = len(pipeline_steps)
-    
-    # Final report
-    logger.info(f"\n{'='*70}")
-    logger.info("PIPELINE EXECUTION COMPLETE")
-    logger.info(f"{'='*70}")
-    logger.info(f"Total Duration: {total_duration}")
-    logger.info(f"Steps Successful: {successful_steps}/{total_steps}")
-    logger.info(f"Start Time: {start_time}")
-    logger.info(f"End Time: {datetime.now()}")
-    
-    return successful_steps >= 2  # At least 50% success
+            __import__(module_path)
+            st.success(f"✓ {name}: Available")
+        except ImportError:
+            st.error(f"✗ {name}: Not available")
 
 # ============================================================================
-# COMMAND LINE INTERFACE
+# FOOTER
 # ============================================================================
 
-def main():
-    """Main command line interface."""
-    parser = argparse.ArgumentParser(
-        description='Weather Anomaly Detection System - Production Backend',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py all          # Run complete pipeline
-  python main.py scrape       # Run only data collection
-  python main.py preprocess   # Run only preprocessing
-  python main.py anomaly      # Run only anomaly detection
-  python main.py forecast     # Run only forecasting
-        """
-    )
-    
-    parser.add_argument(
-        'command',
-        choices=['all', 'scrape', 'preprocess', 'anomaly', 'forecast'],
-        help='Pipeline command to execute'
-    )
-    
-    args = parser.parse_args()
-    
-    # Execute command
-    command_map = {
-        'all': run_complete_pipeline,
-        'scrape': run_scraping,
-        'preprocess': run_preprocessing,
-        'anomaly': run_anomaly_detection,
-        'forecast': run_forecasting
-    }
-    
-    # Run the selected command
-    success = command_map[args.command]()
-    
-    # Exit code
-    sys.exit(0 if success else 1)
+st.divider()
+st.markdown("""
+<div style='text-align: center; color: gray;'>
+    <p>Weather Anomaly Detection System | Live Weather Monitoring</p>
+    <p>Data Source: weather.gov | Last Updated: {}</p>
+</div>
+""".format(pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')), unsafe_allow_html=True)
 
 # ============================================================================
-# ENTRY POINT
+# AUTO-RUN ON STARTUP
 # ============================================================================
 
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nPipeline interrupted by user")
-        sys.exit(130)
-    except Exception as e:
-        print(f"Fatal error: {str(e)}")
-        sys.exit(1)
+# Check if we need to run initial setup
+if not os.path.exists("data/raw/weather_alerts_raw.csv"):
+    st.info("⚙️ First-time setup: Running initial data collection...")
+    run_scraping()
