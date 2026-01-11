@@ -1,12 +1,21 @@
+src/scraping/scrape_weather_alerts.py
+
+
+
+"""
+Web scraper for Weather.gov alerts with proper rate limiting and error handling.
+"""
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
-import logging
 from datetime import datetime, timedelta
 import os
-from typing import Dict, List, Optional
 import json
+from typing import Dict, List, Optional
+import logging
+from urllib.parse import urljoin
+import pytz
 
 # Configure logging
 logging.basicConfig(
@@ -16,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class WeatherAlertScraper:
-    """Scrapes weather alerts from official sources with respect for rate limits."""
+    """Professional weather alert scraper with rate limiting and error handling."""
     
     def __init__(self, base_url: str = "https://www.weather.gov"):
         self.base_url = base_url
@@ -26,338 +35,245 @@ class WeatherAlertScraper:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate',
-            'DNT': '1',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'max-age=0'
         })
-        self.rate_limit_delay = 2  # seconds between requests
+        self.request_delay = 2  # seconds between requests
+        self.max_retries = 3
         
-    def scrape_alerts(self) -> pd.DataFrame:
-        """
-        Scrape current weather alerts from weather.gov/alerts
-        
-        Returns:
-            DataFrame with alert information or empty DataFrame if scraping fails
-        """
-        try:
-            alerts_url = f"{self.base_url}/alerts"
-            logger.info(f"Scraping alerts from {alerts_url}")
-            
-            response = self.session.get(alerts_url, timeout=30)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Find alert data - structure may vary, this is a robust approach
-            alerts_data = []
-            
-            # Look for alert containers (common patterns on weather.gov)
-            alert_elements = soup.find_all(['div', 'article'], class_=lambda x: x and 'alert' in x.lower())
-            
-            if not alert_elements:
-                # Alternative: look for CAP (Common Alerting Protocol) data
-                cap_elements = soup.find_all('entry')  # Atom feed entries
-                if cap_elements:
-                    alerts_data = self._parse_cap_alerts(cap_elements)
+    def scrape_alerts_page(self, url: str) -> Optional[BeautifulSoup]:
+        """Safely scrape a page with retry logic."""
+        for attempt in range(self.max_retries):
+            try:
+                time.sleep(self.request_delay)
+                response = self.session.get(url, timeout=30)
+                response.raise_for_status()
+                
+                if response.status_code == 429:
+                    wait_time = 60 * (attempt + 1)
+                    logger.warning(f"Rate limited. Waiting {wait_time} seconds.")
+                    time.sleep(wait_time)
+                    continue
+                    
+                soup = BeautifulSoup(response.content, 'html.parser')
+                return soup
+                
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Attempt {attempt + 1} failed for {url}: {str(e)}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(5 * (attempt + 1))
                 else:
-                    # Fallback to table parsing
-                    tables = soup.find_all('table')
-                    for table in tables:
-                        alerts_data.extend(self._parse_table_alerts(table))
+                    logger.error(f"Failed to scrape {url} after {self.max_retries} attempts")
+                    return None
+                    
+        return None
+    
+    def parse_alert_entry(self, alert_div) -> Optional[Dict]:
+        """Parse individual alert entry from the alerts page."""
+        try:
+            if not alert_div:
+                return None
+                
+            title_elem = alert_div.find('a', class_='alert-title')
+            if not title_elem:
+                return None
+                
+            alert_title = title_elem.text.strip()
+            alert_link = urljoin(self.base_url, title_elem.get('href', ''))
+            
+            details = {}
+            rows = alert_div.find_all('div', class_='row')
+            
+            for row in rows:
+                cols = row.find_all('div')
+                if len(cols) >= 2:
+                    key = cols[0].text.strip().replace(':', '').lower()
+                    value = cols[1].text.strip()
+                    details[key] = value
+            
+            alert_text_div = alert_div.find('div', class_='alert-text')
+            alert_text = alert_text_div.text.strip() if alert_text_div else ""
+            
+            issued_date = None
+            if 'issued' in details:
+                try:
+                    issued_date = pd.to_datetime(details['issued'])
+                except:
+                    issued_date = datetime.now(pytz.UTC)
             else:
-                alerts_data = self._parse_alert_elements(alert_elements)
+                issued_date = datetime.now(pytz.UTC)
             
-            # If no alerts found, return empty with proper structure
-            if not alerts_data:
-                logger.warning("No alerts found in the page")
-                return pd.DataFrame(columns=[
-                    'alert_id', 'title', 'description', 'region', 'alert_type',
-                    'severity', 'effective', 'expires', 'issued', 'scraped_at'
-                ])
+            alert_type = self._classify_alert_type(alert_title)
+            region = details.get('area', 'Unknown')
             
-            df = pd.DataFrame(alerts_data)
-            df['scraped_at'] = datetime.now()
-            
-            # Remove exact duplicates based on alert_id and issued time
-            if 'alert_id' in df.columns:
-                df = df.drop_duplicates(subset=['alert_id', 'issued'], keep='first')
-            
-            logger.info(f"Successfully scraped {len(df)} alerts")
-            return df
-            
-        except requests.RequestException as e:
-            logger.error(f"Network error during scraping: {str(e)}")
-            return pd.DataFrame()
-        except Exception as e:
-            logger.error(f"Unexpected error during scraping: {str(e)}")
-            return pd.DataFrame()
-    
-    def _parse_alert_elements(self, alert_elements: List) -> List[Dict]:
-        """Parse alert HTML elements."""
-        alerts = []
-        for element in alert_elements:
-            try:
-                alert = {}
-                
-                # Extract title
-                title_elem = element.find(['h2', 'h3', 'h4', 'strong', 'b'])
-                alert['title'] = title_elem.get_text(strip=True) if title_elem else "No Title"
-                
-                # Extract description
-                desc_elem = element.find(['p', 'div'], class_=lambda x: x and 'desc' in str(x).lower())
-                alert['description'] = desc_elem.get_text(strip=True) if desc_elem else ""
-                
-                # Extract region from title or description
-                alert['region'] = self._extract_region(alert['title'] + " " + alert['description'])
-                
-                # Extract alert type
-                alert['alert_type'] = self._extract_alert_type(alert['title'])
-                
-                # Extract severity
-                alert['severity'] = self._extract_severity(alert['title'] + " " + alert['description'])
-                
-                # Generate unique ID
-                alert['alert_id'] = f"{alert['alert_type']}_{alert['region']}_{int(time.time())}"
-                
-                # Timestamps
-                now = datetime.now()
-                alert['effective'] = now
-                alert['expires'] = now + timedelta(hours=6)  # Default 6 hours
-                alert['issued'] = now
-                
-                alerts.append(alert)
-                
-            except Exception as e:
-                logger.warning(f"Failed to parse alert element: {str(e)}")
-                continue
-        
-        return alerts
-    
-    def _parse_cap_alerts(self, cap_elements: List) -> List[Dict]:
-        """Parse CAP format alerts."""
-        alerts = []
-        for entry in cap_elements:
-            try:
-                alert = {}
-                alert['title'] = entry.find('title').text if entry.find('title') else "No Title"
-                alert['description'] = entry.find('summary').text if entry.find('summary') else ""
-                alert['region'] = self._extract_region(alert['title'])
-                alert['alert_type'] = self._extract_alert_type(alert['title'])
-                alert['severity'] = self._extract_severity(alert['title'])
-                alert['alert_id'] = entry.find('id').text if entry.find('id') else f"cap_{int(time.time())}"
-                
-                # Parse timestamps if available
-                now = datetime.now()
-                alert['effective'] = now
-                alert['expires'] = now + timedelta(hours=6)
-                alert['issued'] = now
-                
-                alerts.append(alert)
-            except Exception as e:
-                logger.warning(f"Failed to parse CAP alert: {str(e)}")
-                continue
-        
-        return alerts
-    
-    def _parse_table_alerts(self, table) -> List[Dict]:
-        """Parse table-based alert data."""
-        alerts = []
-        try:
-            rows = table.find_all('tr')
-            for row in rows[1:]:  # Skip header
-                cells = row.find_all('td')
-                if len(cells) >= 3:
-                    alert = {
-                        'title': cells[0].get_text(strip=True),
-                        'region': cells[1].get_text(strip=True),
-                        'alert_type': cells[2].get_text(strip=True),
-                        'description': cells[3].get_text(strip=True) if len(cells) > 3 else "",
-                        'severity': 'Unknown',
-                        'alert_id': f"table_{int(time.time())}",
-                        'effective': datetime.now(),
-                        'expires': datetime.now() + timedelta(hours=6),
-                        'issued': datetime.now()
-                    }
-                    alerts.append(alert)
-        except Exception as e:
-            logger.warning(f"Failed to parse table: {str(e)}")
-        
-        return alerts
-    
-    def _extract_region(self, text: str) -> str:
-        """Extract region from text."""
-        text = text.lower()
-        regions = [
-            'northeast', 'southeast', 'midwest', 'south', 'southwest',
-            'west', 'northwest', 'central', 'eastern', 'western',
-            'northern', 'southern'
-        ]
-        
-        for region in regions:
-            if region in text:
-                return region.capitalize()
-        
-        # Fallback: extract state abbreviations
-        states = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID',
-                 'IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS',
-                 'MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK',
-                 'OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV',
-                 'WI','WY']
-        
-        for state in states:
-            if f" {state} " in f" {text} ":
-                return state
-        
-        return "Unknown"
-    
-    def _extract_alert_type(self, text: str) -> str:
-        """Extract alert type from text."""
-        text = text.lower()
-        alert_types = {
-            'flood': 'Flood',
-            'storm': 'Storm',
-            'tornado': 'Tornado',
-            'hurricane': 'Hurricane',
-            'blizzard': 'Blizzard',
-            'wind': 'Wind',
-            'rain': 'Rain',
-            'snow': 'Snow',
-            'ice': 'Ice',
-            'fog': 'Fog',
-            'heat': 'Heat',
-            'cold': 'Cold',
-            'fire': 'Fire',
-            'air': 'Air Quality',
-            'coastal': 'Coastal',
-            'winter': 'Winter Weather',
-            'thunderstorm': 'Thunderstorm',
-            'tsunami': 'Tsunami'
-        }
-        
-        for key, value in alert_types.items():
-            if key in text:
-                return value
-        
-        return "Other"
-    
-    def _extract_severity(self, text: str) -> str:
-        """Extract severity from text."""
-        text = text.lower()
-        severities = {
-            'warning': 'Warning',
-            'watch': 'Watch',
-            'advisory': 'Advisory',
-            'emergency': 'Emergency',
-            'severe': 'Severe',
-            'extreme': 'Extreme'
-        }
-        
-        for key, value in severities.items():
-            if key in text:
-                return value
-        
-        return "Unknown"
-    
-    def scrape_forecast_discussions(self) -> Optional[str]:
-        """Scrape forecast discussions text."""
-        try:
-            url = f"{self.base_url}/wrh/TextProduct"
-            logger.info(f"Scraping forecast discussions from {url}")
-            
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Look for forecast discussion text
-            forecast_text = ""
-            pre_elements = soup.find_all('pre')
-            for pre in pre_elements:
-                text = pre.get_text(strip=True)
-                if 'discussion' in text.lower() or 'forecast' in text.lower():
-                    forecast_text = text
-                    break
-            
-            if not forecast_text:
-                # Fallback: get all text from main content
-                main = soup.find('main') or soup.find('body')
-                forecast_text = main.get_text(strip=True) if main else ""
-            
-            logger.info(f"Scraped forecast discussion (length: {len(forecast_text)})")
-            return forecast_text[:10000]  # Limit length
+            return {
+                'alert_id': f"{int(issued_date.timestamp())}_{hash(alert_title) % 1000000}",
+                'title': alert_title,
+                'text': alert_text,
+                'type': alert_type,
+                'region': region,
+                'issued_date': issued_date,
+                'effective_date': details.get('effective', ''),
+                'expires_date': details.get('expires', ''),
+                'severity': details.get('severity', 'Unknown'),
+                'certainty': details.get('certainty', 'Unknown'),
+                'urgency': details.get('urgency', 'Unknown'),
+                'link': alert_link,
+                'scraped_at': datetime.now(pytz.UTC)
+            }
             
         except Exception as e:
-            logger.error(f"Failed to scrape forecast discussions: {str(e)}")
+            logger.error(f"Error parsing alert entry: {str(e)}")
             return None
     
-    def save_alerts(self, df: pd.DataFrame, filepath: str):
-        """Save alerts to CSV, appending new data only."""
-        try:
-            if os.path.exists(filepath):
+    def _classify_alert_type(self, title: str) -> str:
+        """Classify alert type based on title keywords."""
+        if not title:
+            return 'other'
+            
+        title_lower = title.lower()
+        
+        alert_types = {
+            'flood': ['flood', 'flooding', 'flash flood', 'river flood'],
+            'storm': ['storm', 'thunderstorm', 'severe storm', 'hail', 'tornado'],
+            'wind': ['wind', 'high wind', 'wind advisory'],
+            'winter': ['winter', 'snow', 'ice', 'blizzard', 'freez', 'frost'],
+            'fire': ['fire', 'red flag', 'fire weather'],
+            'heat': ['heat', 'excessive heat', 'heat advisory'],
+            'cold': ['cold', 'wind chill', 'extreme cold'],
+            'coastal': ['coastal', 'surf', 'high surf', 'rip current'],
+            'air': ['air quality', 'air stagnation'],
+            'other': ['special weather', 'advisory', 'watch', 'warning']
+        }
+        
+        for alert_type, keywords in alert_types.items():
+            if any(keyword in title_lower for keyword in keywords):
+                return alert_type
+                
+        return 'other'
+    
+    def scrape_all_alerts(self) -> List[Dict]:
+        """Scrape all active weather alerts."""
+        alerts_url = f"{self.base_url}/alerts"
+        soup = self.scrape_alerts_page(alerts_url)
+        
+        if not soup:
+            logger.warning("Failed to scrape alerts page")
+            return []  # Return empty list, not None
+        
+        alert_containers = soup.find_all('div', class_='alert-item')
+        
+        # FIX: Check if alert_containers is not None
+        if alert_containers is None:
+            alert_containers = []
+            
+        logger.info(f"Found {len(alert_containers)} alert containers")
+        
+        alerts = []
+        
+        for container in alert_containers:
+            alert_data = self.parse_alert_entry(container)
+            if alert_data:
+                alerts.append(alert_data)
+        
+        if not alerts:
+            alerts = self._fallback_parsing(soup)
+        
+        logger.info(f"Successfully parsed {len(alerts)} alerts")
+        return alerts  # Always returns a list (empty or with items)
+    
+    def _fallback_parsing(self, soup: BeautifulSoup) -> List[Dict]:
+        """Fallback parsing method if structured parsing fails."""
+        alerts = []
+        
+        if not soup:
+            return alerts
+            
+        alert_sections = soup.find_all(['div', 'section'], class_=lambda x: x and 'alert' in x.lower())
+        
+        for section in alert_sections:
+            text = section.get_text(strip=True, separator=' ')
+            if text and len(text) > 50:
+                alert_data = {
+                    'alert_id': f"fallback_{hash(text) % 1000000}",
+                    'title': 'Weather Alert',
+                    'text': text[:1000],
+                    'type': 'other',
+                    'region': 'Unknown',
+                    'issued_date': datetime.now(pytz.UTC),
+                    'effective_date': '',
+                    'expires_date': '',
+                    'severity': 'Unknown',
+                    'certainty': 'Unknown',
+                    'urgency': 'Unknown',
+                    'link': self.base_url + '/alerts',
+                    'scraped_at': datetime.now(pytz.UTC)
+                }
+                alerts.append(alert_data)
+        
+        return alerts
+    
+    def save_alerts_to_csv(self, alerts: List[Dict], filepath: str) -> int:
+        """Save alerts to CSV and return count saved."""
+        if not alerts:
+            logger.warning("No alerts to save")
+            return 0  # Return 0, not None
+        
+        df = pd.DataFrame(alerts)
+        
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        if os.path.exists(filepath):
+            try:
                 existing_df = pd.read_csv(filepath)
-                # Combine and remove duplicates
-                combined_df = pd.concat([existing_df, df], ignore_index=True)
-                
-                # Remove duplicates based on key columns
-                duplicate_cols = ['alert_id', 'issued'] if 'alert_id' in combined_df.columns else ['title', 'issued']
-                combined_df = combined_df.drop_duplicates(subset=duplicate_cols, keep='last')
-                
+                combined_df = pd.concat([existing_df, df]).drop_duplicates(
+                    subset=['alert_id'], 
+                    keep='last'
+                )
                 combined_df.to_csv(filepath, index=False)
-                logger.info(f"Appended {len(df)} new alerts to {filepath}")
-            else:
+                new_count = len(df) - len(existing_df)
+                logger.info(f"Appended {new_count} new alerts to {filepath}")
+                return max(new_count, 0)  # Ensure non-negative
+            except Exception as e:
+                logger.error(f"Error appending to existing file: {str(e)}")
                 df.to_csv(filepath, index=False)
-                logger.info(f"Created new file with {len(df)} alerts: {filepath}")
-                
-        except Exception as e:
-            logger.error(f"Failed to save alerts: {str(e)}")
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                logger.info(f"Saved {len(df)} alerts to {filepath}")
+                return len(df)
+        else:
             df.to_csv(filepath, index=False)
+            logger.info(f"Saved {len(df)} alerts to {filepath}")
+            return len(df)
 
-def main():
-    """Main scraping function to be called by scheduler."""
+def main() -> int:
+    """Main scraping function. Returns number of alerts scraped."""
     scraper = WeatherAlertScraper()
+    alert_count = 0
     
-    # Create data directory
-    os.makedirs('data/raw', exist_ok=True)
-    os.makedirs('data/processed', exist_ok=True)
-    os.makedirs('data/output', exist_ok=True)
+    try:
+        alerts = scraper.scrape_all_alerts()
+        
+        if alerts:
+            timestamp = datetime.now().strftime('%Y%m%d')
+            filepath = f"data/raw/weather_alerts_{timestamp}.csv"
+            
+            count1 = scraper.save_alerts_to_csv(alerts, filepath)
+            
+            main_filepath = "data/raw/weather_alerts_raw.csv"
+            count2 = scraper.save_alerts_to_csv(alerts, main_filepath)
+            
+            alert_count = max(count1, count2, len(alerts))
+            logger.info(f"Scraping completed successfully. Processed {alert_count} alerts.")
+        else:
+            logger.warning("No alerts were scraped.")
+            
+    except Exception as e:
+        logger.error(f"Scraping failed: {str(e)}")
+        return 0  # Return 0 on failure, not None
     
-    # Scrape alerts
-    alerts_df = scraper.scrape_alerts()
-    
-    if not alerts_df.empty:
-        # Save raw alerts
-        raw_filepath = 'data/raw/weather_alerts_raw.csv'
-        scraper.save_alerts(alerts_df, raw_filepath)
-        
-        # Also save as timestamped backup
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-        backup_path = f'data/raw/backups/weather_alerts_{timestamp}.csv'
-        os.makedirs('data/raw/backups', exist_ok=True)
-        alerts_df.to_csv(backup_path, index=False)
-        
-        # Scrape forecast discussions
-        forecast_text = scraper.scrape_forecast_discussions()
-        if forecast_text:
-            forecast_data = {
-                'timestamp': datetime.now().isoformat(),
-                'text': forecast_text
-            }
-            forecast_path = 'data/raw/forecast_discussions.json'
-            if os.path.exists(forecast_path):
-                with open(forecast_path, 'r') as f:
-                    existing_data = json.load(f)
-                existing_data.append(forecast_data)
-                with open(forecast_path, 'w') as f:
-                    json.dump(existing_data, f)
-            else:
-                with open(forecast_path, 'w') as f:
-                    json.dump([forecast_data], f)
-        
-        logger.info("Scraping completed successfully")
-    else:
-        logger.warning("No alerts scraped - data may be empty")
+    # FIX: Always return an integer, never None
+    return alert_count
 
 if __name__ == "__main__":
-    main()
+    result = main()
+    print(f"Scraping completed. Alerts processed: {result}")
