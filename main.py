@@ -1,171 +1,109 @@
 #!/usr/bin/env python3
 """
-Weather Anomaly Detection System - Main Entry Point
-Connects to all backend modules in src/
+Weather Anomaly Detection System - Auto Start
+Automatically runs the pipeline and launches dashboard
 """
 
 import os
 import sys
-import argparse
+import subprocess
 from datetime import datetime
 
 # Add src directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-def run_scraping():
-    """Run web scraping from weather.gov."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Running scraping...")
+def run_pipeline():
+    """Run complete backend pipeline."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting pipeline...")
     
     try:
         from scraping.scrape_weather_alerts import main as scrape_main
-        count = scrape_main()
-        print(f"Scraping completed. Alerts: {count}")
-        return True
-    except Exception as e:
-        print(f"Scraping error: {e}")
-        return False
-
-def run_preprocessing():
-    """Run data preprocessing."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Running preprocessing...")
-    
-    try:
         from preprocessing.preprocess_text import preprocess_pipeline
+        from ml.anomaly_detection import run_anomaly_detection
+        from ml.forecast_model import run_forecasting
         
-        # Check if raw data exists
-        if not os.path.exists("data/raw/weather_alerts_raw.csv"):
-            print("Error: No raw data found. Run scraping first.")
-            return False
+        # Step 1: Scraping
+        print("Step 1: Scraping weather data...")
+        alert_count = scrape_main()
+        print(f"Collected {alert_count} alerts")
         
+        # Step 2: Preprocessing
+        print("Step 2: Processing data...")
         processed_df, daily_df = preprocess_pipeline(
             "data/raw/weather_alerts_raw.csv",
             "data/processed/weather_alerts_processed.csv"
         )
+        print(f"Processed {len(processed_df)} alerts")
         
-        if processed_df is not None:
-            print(f"Preprocessing completed. Alerts: {len(processed_df)}")
-            return True
-        return False
-        
-    except Exception as e:
-        print(f"Preprocessing error: {e}")
-        return False
-
-def run_anomaly_detection():
-    """Run anomaly detection."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Running anomaly detection...")
-    
-    try:
-        from ml.anomaly_detection import run_anomaly_detection
-        
-        if not os.path.exists("data/processed/weather_alerts_daily.csv"):
-            print("Error: No processed data found.")
-            return False
-        
-        result_df, explanations = run_anomaly_detection(
+        # Step 3: Anomaly Detection
+        print("Step 3: Detecting anomalies...")
+        anomaly_df, explanations = run_anomaly_detection(
             "data/processed/weather_alerts_daily.csv",
             "data/output/anomaly_results.csv",
             "models/isolation_forest.pkl"
         )
+        print(f"Anomaly detection completed")
         
-        print(f"Anomaly detection completed. Results: {len(result_df)}")
-        return True
-        
-    except Exception as e:
-        print(f"Anomaly detection error: {e}")
-        return False
-
-def run_forecasting():
-    """Run forecasting."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Running forecasting...")
-    
-    try:
-        from ml.forecast_model import run_forecasting
-        
-        if not os.path.exists("data/processed/weather_alerts_daily.csv"):
-            print("Error: No processed data found.")
-            return False
-        
+        # Step 4: Forecasting
+        print("Step 4: Generating forecasts...")
         forecast_df, status = run_forecasting(
             "data/processed/weather_alerts_daily.csv",
             "data/output/forecast_results.csv",
             "models/xgboost_forecast.pkl"
         )
+        print(f"Forecasting completed")
         
-        print(f"Forecasting completed. Forecasts: {len(forecast_df)}")
+        print("\nPipeline completed successfully!")
         return True
         
     except Exception as e:
-        print(f"Forecasting error: {e}")
+        print(f"Pipeline error: {e}")
         return False
 
-def run_complete_pipeline():
-    """Run complete end-to-end pipeline."""
-    print("\n" + "="*60)
-    print("WEATHER ANOMALY DETECTION PIPELINE")
-    print("="*60)
+def launch_dashboard():
+    """Launch Streamlit dashboard."""
+    print("Launching dashboard...")
     
-    # Ensure directories exist
+    # Find dashboard
+    dashboard_path = os.path.join(os.path.dirname(__file__), 'src', 'dashboard', 'app.py')
+    
+    if not os.path.exists(dashboard_path):
+        print(f"Dashboard not found: {dashboard_path}")
+        return False
+    
+    # Launch Streamlit
+    cmd = [sys.executable, "-m", "streamlit", "run", dashboard_path, "--server.port", "8501"]
+    
+    try:
+        subprocess.run(cmd)
+        return True
+    except Exception as e:
+        print(f"Error launching dashboard: {e}")
+        return False
+
+def main():
+    """Main function - runs everything automatically."""
+    
+    # Create directories
     os.makedirs("data/raw", exist_ok=True)
     os.makedirs("data/processed", exist_ok=True)
     os.makedirs("data/output", exist_ok=True)
     os.makedirs("models", exist_ok=True)
     
-    steps = [
-        ("Scraping", run_scraping),
-        ("Preprocessing", run_preprocessing),
-        ("Anomaly Detection", run_anomaly_detection),
-        ("Forecasting", run_forecasting)
-    ]
-    
-    results = []
-    
-    for step_name, step_func in steps:
-        print(f"\n--- {step_name} ---")
-        success = step_func()
-        results.append(success)
-    
-    # Summary
-    print("\n" + "="*60)
-    successful = sum(results)
-    total = len(steps)
-    
-    print(f"PIPELINE COMPLETED: {successful}/{total} steps successful")
-    
-    if successful == total:
-        print("Status: All steps completed successfully")
-    elif successful >= total // 2:
-        print("Status: Partial success - check logs for details")
-    else:
-        print("Status: Most steps failed - system needs attention")
-    
     print("="*60)
-    return successful
-
-def main():
-    """Main entry point with command line interface."""
-    parser = argparse.ArgumentParser(
-        description='Weather Anomaly Detection System Backend'
-    )
+    print("WEATHER ANOMALY DETECTION SYSTEM")
+    print("="*60)
     
-    parser.add_argument(
-        'command',
-        choices=['all', 'scrape', 'preprocess', 'anomaly', 'forecast'],
-        help='Command to execute'
-    )
+    # Run pipeline
+    success = run_pipeline()
     
-    args = parser.parse_args()
-    
-    if args.command == 'all':
-        run_complete_pipeline()
-    elif args.command == 'scrape':
-        run_scraping()
-    elif args.command == 'preprocess':
-        run_preprocessing()
-    elif args.command == 'anomaly':
-        run_anomaly_detection()
-    elif args.command == 'forecast':
-        run_forecasting()
+    if success:
+        print("\n" + "="*60)
+        print("Starting dashboard...")
+        print("="*60)
+        launch_dashboard()
+    else:
+        print("\nPipeline failed. Check logs for details.")
 
 if __name__ == "__main__":
     main()
