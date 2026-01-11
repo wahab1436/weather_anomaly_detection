@@ -1,7 +1,3 @@
-src/scraping/scrape_weather_alerts.py
-
-
-
 """
 Web scraper for Weather.gov alerts with proper rate limiting and error handling.
 """
