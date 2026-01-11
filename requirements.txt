@@ -13,3 +13,4 @@ joblib
 nltk==3.8.1
 textblob
 pytz
+lightbgm
