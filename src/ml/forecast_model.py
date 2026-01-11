@@ -1,471 +1,380 @@
-"""
-Forecasting module for weather alert predictions - FIXED VERSION
-Uses XGBoost for time series forecasting.
-"""
 import pandas as pd
 import numpy as np
-from typing import Dict, Tuple, List, Optional
+from sklearn.model_selection import train_test_split, TimeSeriesSplit
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.preprocessing import StandardScaler
+import xgboost as xgb
+import lightgbm as lgb
+import joblib
 import logging
 from datetime import datetime, timedelta
-import warnings
-import os  # <-- ADDED
-import json  # <-- ADDED
-
-warnings.filterwarnings('ignore')
-
-try:
-    import xgboost as xgb
-    from sklearn.model_selection import TimeSeriesSplit
-    from sklearn.metrics import mean_absolute_error, mean_squared_error
-    import joblib
-    XGBOOST_AVAILABLE = True
-except ImportError as e:
-    logger = logging.getLogger(__name__)
-    logger.warning(f"XGBoost not available: {e}")
-    XGBOOST_AVAILABLE = False
-    # Create dummy classes
-    class DummyXGBRegressor:
-        def fit(self, *args, **kwargs): pass
-        def predict(self, X): return np.zeros(len(X))
-    xgb = type('xgboost', (), {'XGBRegressor': DummyXGBRegressor})()
-    joblib = type('joblib', (), {'dump': lambda x, y: None, 'load': lambda x: None})()
+import os
+from typing import Tuple, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 class AlertForecaster:
-    """Forecast future weather alerts using XGBoost."""
+    """Forecasts future weather alert patterns."""
     
-    def __init__(self, forecast_horizon: int = 7, n_splits: int = 5):
-        """
-        Initialize forecaster.
-        
-        Args:
-            forecast_horizon: Number of days to forecast ahead
-            n_splits: Number of splits for time series cross-validation
-        """
+    def __init__(self, model_type: str = 'xgboost', forecast_horizon: int = 7):
+        self.model_type = model_type
         self.forecast_horizon = forecast_horizon
-        self.n_splits = n_splits
-        self.models = {}
-        self.feature_columns = None
-        self.target_columns = None
-        self.is_fitted = False
+        self.model = None
+        self.scaler = StandardScaler()
+        self.feature_names = None
+        self.is_trained = False
         
-    def create_features(self, df: pd.DataFrame, target_col: str = 'total_alerts') -> Tuple[pd.DataFrame, List[str]]:
-        """Create features for time series forecasting."""
-        if df.empty:
-            return pd.DataFrame(), []
-        
-        features_df = df.copy()
-        
-        # Ensure datetime index
-        if 'issued_date' in features_df.columns:
-            features_df = features_df.set_index('issued_date')
-        
-        # Check if target column exists
-        if target_col not in features_df.columns:
-            logger.warning(f"Target column '{target_col}' not found. Available columns: {list(features_df.columns)}")
-            # Create a dummy target
-            features_df['target'] = 0
+        if model_type == 'xgboost':
+            self.model = xgb.XGBRegressor(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=6,
+                random_state=42,
+                objective='reg:squarederror'
+            )
+        elif model_type == 'lightgbm':
+            self.model = lgb.LGBMRegressor(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=6,
+                random_state=42
+            )
         else:
-            features_df['target'] = features_df[target_col]
+            raise ValueError(f"Unsupported model type: {model_type}")
+    
+    def prepare_forecast_data(self, df: pd.DataFrame, target_col: str = 'total_alerts',
+                            lookback: int = 14) -> Tuple[pd.DataFrame, pd.Series]:
+        """Prepare data for time series forecasting."""
+        if df.empty or len(df) < lookback + self.forecast_horizon:
+            logger.warning("Insufficient data for forecasting")
+            return pd.DataFrame(), pd.Series()
         
-        # Lag features (only if we have enough data)
-        max_lags = min(30, len(features_df) - 1)
-        if max_lags > 0:
-            for lag in range(1, max_lags + 1):
-                features_df[f'lag_{lag}'] = features_df['target'].shift(lag)
+        # Ensure sorted by date
+        df = df.sort_values('date').reset_index(drop=True)
         
-        # Rolling statistics (handle insufficient data)
-        windows = [3, 7, 14, 30]
-        for window in windows:
-            if len(features_df) >= window:
-                features_df[f'rolling_mean_{window}'] = features_df['target'].rolling(window=window, min_periods=1).mean()
-                features_df[f'rolling_std_{window}'] = features_df['target'].rolling(window=window, min_periods=1).std()
-                features_df[f'rolling_min_{window}'] = features_df['target'].rolling(window=window, min_periods=1).min()
-                features_df[f'rolling_max_{window}'] = features_df['target'].rolling(window=window, min_periods=1).max()
+        features_list = []
+        targets_list = []
         
-        # Exponential moving averages
-        for alpha in [0.1, 0.3, 0.5]:
-            features_df[f'ema_{alpha}'] = features_df['target'].ewm(alpha=alpha, min_periods=1).mean()
-        
-        # Temporal features from index
-        if hasattr(features_df.index, 'dayofweek'):
-            features_df['day_of_week'] = features_df.index.dayofweek
-            features_df['day_of_month'] = features_df.index.day
-            features_df['month'] = features_df.index.month
-            features_df['year'] = features_df.index.year
+        for i in range(lookback, len(df) - self.forecast_horizon):
+            # Historical features
+            hist_data = df.iloc[i-lookback:i]
             
-            # Cyclical encoding for temporal features
-            features_df['day_of_week_sin'] = np.sin(2 * np.pi * features_df['day_of_week'] / 7)
-            features_df['day_of_week_cos'] = np.cos(2 * np.pi * features_df['day_of_week'] / 7)
-            features_df['month_sin'] = np.sin(2 * np.pi * features_df['month'] / 12)
-            features_df['month_cos'] = np.cos(2 * np.pi * features_df['month'] / 12)
+            # Extract numerical features
+            numerical_features = hist_data.select_dtypes(include=[np.number])
+            
+            # Create feature vector
+            feature_vector = []
+            
+            # Summary statistics from history
+            for col in ['total_alerts']:
+                if col in numerical_features.columns:
+                    feature_vector.extend([
+                        numerical_features[col].mean(),
+                        numerical_features[col].std(),
+                        numerical_features[col].max(),
+                        numerical_features[col].min(),
+                        numerical_features[col].iloc[-1]  # Most recent value
+                    ])
+            
+            # Date features for prediction period
+            prediction_date = df.iloc[i]['date']
+            feature_vector.extend([
+                prediction_date.dayofweek,
+                prediction_date.month,
+                prediction_date.isocalendar().week,
+                1 if prediction_date.dayofweek >= 5 else 0,  # Weekend
+                prediction_date.day
+            ])
+            
+            # Add lag features for specific alert types
+            alert_type_cols = [col for col in df.columns if 'alert_type' in str(col)]
+            for col in alert_type_cols[:5]:  # Limit to top 5 types
+                if col in numerical_features.columns:
+                    feature_vector.append(numerical_features[col].iloc[-1])  # Most recent count
+                    feature_vector.append(numerical_features[col].mean())    # Average
+            
+            features_list.append(feature_vector)
+            
+            # Target: future value
+            target = df.iloc[i + self.forecast_horizon][target_col]
+            targets_list.append(target)
         
-        # Difference features (only if we have enough data)
-        if len(features_df) > 1:
-            features_df['diff_1'] = features_df['target'].diff(1)
-        if len(features_df) > 7:
-            features_df['diff_7'] = features_df['target'].diff(7)
+        # Create DataFrames
+        features_df = pd.DataFrame(features_list)
+        targets_series = pd.Series(targets_list)
         
-        # Percentage changes (handle division by zero)
-        if len(features_df) > 1:
-            pct_change = features_df['target'].pct_change(1)
-            features_df['pct_change_1'] = pct_change.fillna(0)
+        # Store feature names
+        self.feature_names = [f'feature_{i}' for i in range(features_df.shape[1])]
+        features_df.columns = self.feature_names
         
-        # Remove rows with NaN values (from lag features)
-        features_df = features_df.dropna()
-        
-        # Define feature columns (all except target)
-        feature_columns = [col for col in features_df.columns if col != 'target']
-        
-        return features_df, feature_columns
+        return features_df, targets_series
     
-    def prepare_forecast_data(self, df: pd.DataFrame, target_col: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-        """Prepare data for forecasting."""
-        features_df, feature_columns = self.create_features(df, target_col)
-        
-        if features_df.empty:
-            return np.array([]), np.array([]), feature_columns
-        
-        X = features_df[feature_columns].values
-        y = features_df['target'].values
-        
-        self.feature_columns = feature_columns
-        self.target_columns = target_col
-        
-        return X, y, feature_columns
-    
-    def train_test_split_time_series(self, X: np.ndarray, y: np.ndarray, test_size: float = 0.2) -> Tuple:
-        """Split time series data maintaining temporal order."""
-        if len(X) == 0:
-            return np.array([]), np.array([]), np.array([]), np.array([])
-        
-        split_idx = int(len(X) * (1 - test_size))
-        
-        X_train, X_test = X[:split_idx], X[split_idx:]
-        y_train, y_test = y[:split_idx], y[split_idx:]
-        
-        return X_train, X_test, y_train, y_test
-    
-    def fit(self, df: pd.DataFrame, target_columns: List[str] = None):
-        """Fit forecasting models for specified target columns."""
-        if target_columns is None:
-            # Check which columns actually exist
-            available_cols = df.columns.tolist()
-            target_columns = [col for col in ['total_alerts', 'flood', 'storm', 'wind'] 
-                            if col in available_cols]
-        
-        if not target_columns:
-            logger.warning("No valid target columns found for forecasting")
+    def train(self, X: pd.DataFrame, y: pd.Series, test_size: float = 0.2):
+        """Train the forecast model."""
+        if X.empty or y.empty:
+            logger.warning("No data for training")
             return
         
-        for target_col in target_columns:
-            try:
-                # Prepare data
-                X, y, feature_cols = self.prepare_forecast_data(df, target_col)
-                
-                if len(X) < 20:  # Reduced minimum
-                    logger.warning(f"Insufficient data for {target_col}. Need at least 20 samples, have {len(X)}.")
-                    continue
-                
-                # Split data
-                X_train, X_test, y_train, y_test = self.train_test_split_time_series(X, y, test_size=0.2)
-                
-                if len(X_train) == 0:
-                    logger.warning(f"No training data for {target_col}")
-                    continue
-                
-                # Initialize and train XGBoost model
-                model = xgb.XGBRegressor(
-                    n_estimators=200,  # Reduced for faster training
-                    max_depth=4,       # Reduced to prevent overfitting
-                    learning_rate=0.05,
-                    subsample=0.8,
-                    colsample_bytree=0.8,
-                    random_state=42,
-                    n_jobs=-1,
-                    early_stopping_rounds=20
-                )
-                
-                # Train with early stopping if we have validation data
-                if len(X_test) > 0:
-                    model.fit(
-                        X_train, y_train,
-                        eval_set=[(X_test, y_test)],
-                        verbose=False
-                    )
-                else:
-                    model.fit(X_train, y_train, verbose=False)
-                
-                # Store model
-                self.models[target_col] = {
-                    'model': model,
-                    'feature_columns': feature_cols,
-                    'last_date': df.index[-1] if hasattr(df, 'index') else pd.Timestamp.now()
-                }
-                
-                # Evaluate model if test data exists
-                if len(X_test) > 0:
-                    predictions = model.predict(X_test)
-                    mae = mean_absolute_error(y_test, predictions)
-                    rmse = np.sqrt(mean_squared_error(y_test, predictions))
-                    logger.info(f"Model for {target_col}: MAE={mae:.2f}, RMSE={rmse:.2f}")
-                else:
-                    logger.info(f"Model for {target_col} trained (no evaluation data)")
-                
-            except Exception as e:
-                logger.error(f"Error fitting model for {target_col}: {str(e)}")
+        # Split data (time series aware)
+        tscv = TimeSeriesSplit(n_splits=3)
         
-        self.is_fitted = len(self.models) > 0
-        logger.info(f"Fitted {len(self.models)} forecasting models")
+        # Scale features
+        X_scaled = self.scaler.fit_transform(X)
+        
+        # Cross-validation
+        cv_scores = []
+        for train_idx, val_idx in tscv.split(X_scaled):
+            X_train, X_val = X_scaled[train_idx], X_scaled[val_idx]
+            y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+            
+            self.model.fit(X_train, y_train)
+            y_pred = self.model.predict(X_val)
+            
+            mae = mean_absolute_error(y_val, y_pred)
+            cv_scores.append(mae)
+        
+        # Final training on all data
+        self.model.fit(X_scaled, y)
+        self.is_trained = True
+        
+        logger.info(f"Model trained with CV MAE: {np.mean(cv_scores):.2f} (+/- {np.std(cv_scores):.2f})")
     
-    def forecast(self, df: pd.DataFrame, steps_ahead: int = None) -> Dict:
-        """Generate forecasts for specified steps ahead."""
-        if not self.is_fitted:
-            logger.error("No models fitted. Call fit() first.")
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """Make predictions."""
+        if not self.is_trained:
+            logger.warning("Model not trained")
+            return np.array([])
+        
+        X_scaled = self.scaler.transform(X)
+        predictions = self.model.predict(X_scaled)
+        
+        return predictions
+    
+    def forecast_future(self, historical_df: pd.DataFrame, days_ahead: int = 7) -> pd.DataFrame:
+        """Generate future forecasts."""
+        if not self.is_trained or historical_df.empty:
+            logger.warning("Cannot generate forecast: model not trained or no data")
+            return pd.DataFrame()
+        
+        # Prepare data for forecasting
+        lookback = 14
+        if len(historical_df) < lookback:
+            lookback = len(historical_df)
+        
+        forecasts = []
+        
+        # Generate forecasts for each future day
+        for day_offset in range(1, days_ahead + 1):
+            # Use recent history
+            recent_data = historical_df.iloc[-lookback:].copy()
+            
+            # Prepare features for this prediction
+            feature_vector = []
+            
+            # Historical statistics
+            numerical_features = recent_data.select_dtypes(include=[np.number])
+            
+            for col in ['total_alerts']:
+                if col in numerical_features.columns:
+                    feature_vector.extend([
+                        numerical_features[col].mean(),
+                        numerical_features[col].std(),
+                        numerical_features[col].max(),
+                        numerical_features[col].min(),
+                        numerical_features[col].iloc[-1]
+                    ])
+            
+            # Date features for forecast day
+            forecast_date = historical_df['date'].iloc[-1] + timedelta(days=day_offset)
+            feature_vector.extend([
+                forecast_date.dayofweek,
+                forecast_date.month,
+                forecast_date.isocalendar().week,
+                1 if forecast_date.dayofweek >= 5 else 0,
+                forecast_date.day
+            ])
+            
+            # Lag features for alert types
+            alert_type_cols = [col for col in historical_df.columns if 'alert_type' in str(col)]
+            for col in alert_type_cols[:5]:
+                if col in numerical_features.columns:
+                    feature_vector.append(numerical_features[col].iloc[-1])
+                    feature_vector.append(numerical_features[col].mean())
+            
+            # Make prediction
+            X_pred = pd.DataFrame([feature_vector], columns=self.feature_names)
+            prediction = self.predict(X_pred)
+            
+            # Add confidence interval (simple approach)
+            if len(prediction) > 0:
+                confidence = prediction[0] * 0.2  # 20% margin
+                
+                forecasts.append({
+                    'date': forecast_date,
+                    'predicted_alerts': max(0, round(prediction[0])),
+                    'lower_bound': max(0, round(prediction[0] - confidence)),
+                    'upper_bound': max(0, round(prediction[0] + confidence)),
+                    'confidence': 'medium'
+                })
+        
+        return pd.DataFrame(forecasts)
+    
+    def evaluate(self, X: pd.DataFrame, y: pd.Series) -> Dict:
+        """Evaluate model performance."""
+        if not self.is_trained:
             return {}
         
-        if steps_ahead is None:
-            steps_ahead = self.forecast_horizon
+        predictions = self.predict(X)
         
-        forecasts = {}
+        if len(predictions) == 0:
+            return {}
         
-        for target_col, model_data in self.models.items():
-            try:
-                # Prepare latest data for forecasting
-                latest_data = df.copy()
-                if 'issued_date' in latest_data.columns:
-                    latest_data = latest_data.set_index('issued_date')
-                
-                # Get the model and features
-                model = model_data['model']
-                feature_cols = model_data['feature_columns']
-                
-                # Create forecast dates
-                last_date = latest_data.index[-1] if len(latest_data) > 0 else pd.Timestamp.now()
-                forecast_dates = pd.date_range(
-                    start=last_date + pd.Timedelta(days=1),
-                    periods=steps_ahead,
-                    freq='D'
-                )
-                
-                # Generate simple forecast (simplified approach)
-                # For now, use last value as forecast
-                if target_col in latest_data.columns and len(latest_data) > 0:
-                    last_value = float(latest_data[target_col].iloc[-1])
-                    target_forecasts = [max(0, last_value) for _ in range(steps_ahead)]
-                else:
-                    target_forecasts = [0 for _ in range(steps_ahead)]
-                
-                # Calculate simple confidence intervals
-                if target_forecasts:
-                    std_dev = np.std(target_forecasts) if len(target_forecasts) > 1 else target_forecasts[0] * 0.1
-                    lower = [max(0, x - 1.96 * std_dev) for x in target_forecasts]
-                    upper = [x + 1.96 * std_dev for x in target_forecasts]
-                else:
-                    lower = upper = []
-                
-                # Store forecasts
-                forecasts[target_col] = {
-                    'dates': forecast_dates,
-                    'values': target_forecasts,
-                    'confidence_intervals': (lower, upper)
-                }
-                
-                logger.info(f"Generated {steps_ahead}-day forecast for {target_col}")
-                
-            except Exception as e:
-                logger.error(f"Error forecasting {target_col}: {str(e)}")
-                # Provide default forecast
-                forecast_dates = pd.date_range(
-                    start=pd.Timestamp.now() + pd.Timedelta(days=1),
-                    periods=steps_ahead,
-                    freq='D'
-                )
-                forecasts[target_col] = {
-                    'dates': forecast_dates,
-                    'values': [0] * steps_ahead,
-                    'confidence_intervals': ([0] * steps_ahead, [0] * steps_ahead)
-                }
+        metrics = {
+            'mae': mean_absolute_error(y, predictions),
+            'mse': mean_squared_error(y, predictions),
+            'rmse': np.sqrt(mean_squared_error(y, predictions)),
+            'r2': r2_score(y, predictions),
+            'mape': np.mean(np.abs((y - predictions) / np.maximum(y, 1))) * 100
+        }
         
-        return forecasts
+        return metrics
     
-    def save_models(self, filepath: str):
-        """Save all trained models."""
-        if not self.is_fitted:
-            logger.warning("No models fitted. Nothing to save.")
-            return
-        
-        try:
-            # Create directory if it doesn't exist
+    def save_model(self, filepath: str):
+        """Save trained model."""
+        if self.is_trained:
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            
             model_data = {
-                'models': self.models,
-                'forecast_horizon': self.forecast_horizon,
-                'n_splits': self.n_splits,
-                'is_fitted': self.is_fitted
+                'model': self.model,
+                'scaler': self.scaler,
+                'feature_names': self.feature_names,
+                'model_type': self.model_type,
+                'forecast_horizon': self.forecast_horizon
             }
-            
             joblib.dump(model_data, filepath)
-            logger.info(f"Models saved to {filepath}")
-            
-        except Exception as e:
-            logger.error(f"Error saving models: {str(e)}")
+            logger.info(f"Saved model to {filepath}")
     
-    def load_models(self, filepath: str):
-        """Load trained models."""
-        try:
-            if not os.path.exists(filepath):
-                logger.warning(f"Model file not found: {filepath}")
-                return
-            
+    def load_model(self, filepath: str):
+        """Load trained model."""
+        if os.path.exists(filepath):
             model_data = joblib.load(filepath)
-            
-            self.models = model_data['models']
+            self.model = model_data['model']
+            self.scaler = model_data['scaler']
+            self.feature_names = model_data['feature_names']
+            self.model_type = model_data.get('model_type', 'xgboost')
             self.forecast_horizon = model_data.get('forecast_horizon', 7)
-            self.n_splits = model_data.get('n_splits', 5)
-            self.is_fitted = model_data.get('is_fitted', False)
-            
-            logger.info(f"Loaded {len(self.models)} models from {filepath}")
-            
-        except Exception as e:
-            logger.error(f"Error loading models: {str(e)}")
-            self.is_fitted = False
+            self.is_trained = True
+            logger.info(f"Loaded model from {filepath}")
+    
+    def generate_forecast_insights(self, forecast_df: pd.DataFrame) -> Dict:
+        """Generate plain English insights from forecasts."""
+        insights = {
+            'summary': '',
+            'key_forecasts': [],
+            'recommendations': []
+        }
+        
+        if forecast_df.empty:
+            insights['summary'] = "Insufficient data for forecasting."
+            return insights
+        
+        # Calculate overall trend
+        trend = 'stable'
+        if len(forecast_df) > 1:
+            first = forecast_df['predicted_alerts'].iloc[0]
+            last = forecast_df['predicted_alerts'].iloc[-1]
+            if last > first * 1.3:
+                trend = 'increasing'
+            elif last < first * 0.7:
+                trend = 'decreasing'
+        
+        # Generate summary
+        avg_prediction = forecast_df['predicted_alerts'].mean()
+        max_day = forecast_df.loc[forecast_df['predicted_alerts'].idxmax()]
+        
+        insights['summary'] = (
+            f"Forecast predicts an average of {avg_prediction:.0f} alerts per day "
+            f"over the next {len(forecast_df)} days, with a {trend} trend."
+        )
+        
+        # List key forecasts
+        for _, row in forecast_df.iterrows():
+            forecast_info = {
+                'date': row['date'].strftime('%Y-%m-%d'),
+                'predicted_alerts': int(row['predicted_alerts']),
+                'range': f"{int(row['lower_bound'])}-{int(row['upper_bound'])}",
+                'confidence': row['confidence']
+            }
+            insights['key_forecasts'].append(forecast_info)
+        
+        # Generate recommendations
+        if trend == 'increasing':
+            insights['recommendations'].append("Increasing alert trend detected. Consider preparing for potential severe weather.")
+        
+        if max_day['predicted_alerts'] > 15:
+            insights['recommendations'].append(f"High alert volume predicted on {max_day['date'].strftime('%Y-%m-%d')}. Monitor weather conditions closely.")
+        
+        if avg_prediction < 5:
+            insights['recommendations'].append("Low alert volume predicted. Normal monitoring procedures are sufficient.")
+        
+        return insights
 
-def run_forecasting(input_path: str, output_path: str, model_path: str = None):
-    """Complete forecasting pipeline."""
-    try:
-        # Check if input file exists
-        if not os.path.exists(input_path):
-            logger.error(f"Input file not found: {input_path}")
-            # Create default output
-            forecast_df = pd.DataFrame({
-                'date': [datetime.now().strftime('%Y-%m-%d')],
-                'target': ['total_alerts'],
-                'forecast': [0],
-                'lower_bound': [0],
-                'upper_bound': [0]
-            })
-            
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            forecast_df.to_csv(output_path, index=False)
-            return forecast_df, {"error": "Input file not found"}
-        
-        # Load daily data
-        df = pd.read_csv(input_path)
-        
-        if df.empty:
-            logger.warning("Input file is empty")
-            # Create default output
-            forecast_df = pd.DataFrame({
-                'date': [datetime.now().strftime('%Y-%m-%d')],
-                'target': ['total_alerts'],
-                'forecast': [0],
-                'lower_bound': [0],
-                'upper_bound': [0]
-            })
-            
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            forecast_df.to_csv(output_path, index=False)
-            return forecast_df, {"error": "Input file is empty"}
-        
-        # Convert date column
-        if 'issued_date' in df.columns:
-            df['issued_date'] = pd.to_datetime(df['issued_date'], errors='coerce')
-            df = df.set_index('issued_date')
-        else:
-            # If no date column, create one
-            df.index = pd.date_range(end=datetime.now(), periods=len(df), freq='D')
-        
-        logger.info(f"Loaded {len(df)} days of data for forecasting")
-        
-        # Initialize forecaster
-        forecaster = AlertForecaster(forecast_horizon=7)
-        
-        # Load or train models
-        model_loaded = False
-        if model_path and os.path.exists(model_path):
-            try:
-                forecaster.load_models(model_path)
-                model_loaded = forecaster.is_fitted
-            except Exception as e:
-                logger.warning(f"Could not load model: {e}")
-        
-        # If model not loaded, try to train
-        if not forecaster.is_fitted and len(df) >= 20:
-            # Fit models for available alert types
-            available_cols = df.columns.tolist()
-            target_columns = [col for col in ['total_alerts', 'flood', 'storm', 'wind'] 
-                            if col in available_cols]
-            
-            if target_columns:
-                forecaster.fit(df, target_columns)
-                
-                if forecaster.is_fitted and model_path:
-                    forecaster.save_models(model_path)
-            else:
-                logger.warning("No target columns available for forecasting")
-        
-        # Generate forecasts
-        forecasts = forecaster.forecast(df, steps_ahead=7)
-        
-        # Prepare output data
-        forecast_df = pd.DataFrame()
-        
-        for target, data in forecasts.items():
-            temp_df = pd.DataFrame({
-                'date': data['dates'],
-                'target': target,
-                'forecast': data['values'],
-                'lower_bound': data['confidence_intervals'][0],
-                'upper_bound': data['confidence_intervals'][1]
-            })
-            forecast_df = pd.concat([forecast_df, temp_df], ignore_index=True)
-        
+def main():
+    """Main forecasting function."""
+    forecaster = AlertForecaster(model_type='xgboost', forecast_horizon=7)
+    
+    # Load processed data
+    processed_path = 'data/processed/weather_alerts_processed.csv'
+    if not os.path.exists(processed_path):
+        logger.error(f"Processed data not found: {processed_path}")
+        return
+    
+    processed_df = pd.read_csv(processed_path, parse_dates=['date'])
+    
+    if processed_df.empty or len(processed_df) < 30:
+        logger.warning("Insufficient historical data for forecasting (need at least 30 days)")
+        return
+    
+    # Prepare data
+    X, y = forecaster.prepare_forecast_data(processed_df)
+    
+    if X.empty or y.empty:
+        logger.warning("Could not prepare forecast data")
+        return
+    
+    # Train model
+    forecaster.train(X, y)
+    
+    # Evaluate model
+    metrics = forecaster.evaluate(X, y)
+    logger.info(f"Model metrics: {metrics}")
+    
+    # Generate future forecasts
+    forecast_df = forecaster.forecast_future(processed_df, days_ahead=7)
+    
+    if not forecast_df.empty:
         # Save forecasts
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        forecast_df.to_csv(output_path, index=False)
+        forecast_path = 'data/output/alert_forecasts.csv'
+        os.makedirs('data/output', exist_ok=True)
+        forecast_df.to_csv(forecast_path, index=False)
         
-        logger.info(f"Forecasting complete. Generated forecasts for {len(forecasts)} targets")
-        logger.info(f"Results saved to {output_path}")
+        # Generate insights
+        insights = forecaster.generate_forecast_insights(forecast_df)
         
-        return forecast_df, {"status": "success", "forecasts_generated": len(forecasts)}
+        # Save insights
+        insights_path = 'data/output/forecast_insights.json'
+        import json
+        with open(insights_path, 'w') as f:
+            json.dump(insights, f, indent=2)
         
-    except Exception as e:
-        logger.error(f"Forecasting pipeline failed: {str(e)}")
-        # Create default output
-        try:
-            forecast_df = pd.DataFrame({
-                'date': [datetime.now().strftime('%Y-%m-%d')],
-                'target': ['total_alerts'],
-                'forecast': [0],
-                'lower_bound': [0],
-                'upper_bound': [0]
-            })
-            
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            forecast_df.to_csv(output_path, index=False)
-            return forecast_df, {"error": str(e)}
-        except:
-            return pd.DataFrame(), {"error": "Complete pipeline failure"}
+        # Save model
+        model_path = 'models/xgboost_forecast.pkl'
+        forecaster.save_model(model_path)
+        
+        logger.info("Forecasting completed successfully")
+        
+        # Print summary
+        print(f"Forecasts generated for {len(forecast_df)} days")
+        print(f"Average predicted alerts: {forecast_df['predicted_alerts'].mean():.1f}")
 
 if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Example usage
-    input_file = "data/processed/weather_alerts_daily.csv"
-    output_file = "data/output/forecast_results.csv"
-    model_file = "models/xgboost_forecast.pkl"
-    
-    # Create directories
-    os.makedirs("data/output", exist_ok=True)
-    os.makedirs("models", exist_ok=True)
-    
-    result_df, status = run_forecasting(input_file, output_file, model_file)
-    print(f"Forecast generated: {len(result_df)} rows")
-    print(f"Status: {status}")
+    main()
