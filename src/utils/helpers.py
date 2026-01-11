@@ -1,324 +1,161 @@
-"""
-Utility functions for the weather anomaly detection system.
-"""
-import os
-import json
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
 import pandas as pd
 import numpy as np
-from functools import wraps
-import time
+from datetime import datetime, timedelta
+import logging
+import os
+from typing import Dict, List, Optional, Any
+import json
 
 logger = logging.getLogger(__name__)
 
-def setup_logging(log_file: str = "logs/weather_dashboard.log"):
-    """Setup comprehensive logging configuration."""
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+def setup_directories():
+    """Create necessary directories for the project."""
+    directories = [
+        'data/raw',
+        'data/raw/backups',
+        'data/processed',
+        'data/output',
+        'models',
+        'notebooks',
+        'logs'
+    ]
     
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    
-    # Set higher level for libraries
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('requests').setLevel(logging.WARNING)
+    for directory in directories:
+        os.makedirs(directory, exist_ok=True)
+        logger.info(f"Created directory: {directory}")
 
-def validate_dataframe(df: pd.DataFrame, required_columns: List[str]) -> bool:
-    """Validate dataframe has required columns and data."""
+def validate_dataframe(df: pd.DataFrame, required_cols: List[str]) -> bool:
+    """Validate DataFrame structure."""
     if df.empty:
         logger.warning("DataFrame is empty")
         return False
     
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    
-    if missing_columns:
-        logger.error(f"Missing required columns: {missing_columns}")
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        logger.warning(f"Missing required columns: {missing_cols}")
         return False
-    
-    # Check for excessive null values
-    null_counts = df[required_columns].isnull().sum()
-    total_rows = len(df)
-    
-    for col, null_count in null_counts.items():
-        null_percentage = (null_count / total_rows) * 100
-        if null_percentage > 50:  # More than 50% null
-            logger.warning(f"Column {col} has {null_percentage:.1f}% null values")
     
     return True
 
-def calculate_statistics(df: pd.DataFrame) -> Dict[str, Any]:
-    """Calculate basic statistics for the dataset."""
-    stats = {
-        'total_records': len(df),
-        'date_range': {},
-        'alert_types': {},
-        'missing_values': {}
-    }
+def calculate_summary_statistics(df: pd.DataFrame) -> Dict:
+    """Calculate summary statistics for alert data."""
+    stats = {}
+    
+    if df.empty:
+        return stats
+    
+    # Basic counts
+    stats['total_alerts'] = len(df)
+    stats['unique_regions'] = df['region'].nunique() if 'region' in df.columns else 0
+    stats['unique_alert_types'] = df['alert_type'].nunique() if 'alert_type' in df.columns else 0
     
     # Date range
-    if 'issued_date' in df.columns:
-        df['issued_date'] = pd.to_datetime(df['issued_date'], errors='coerce')
-        valid_dates = df['issued_date'].dropna()
-        if not valid_dates.empty:
-            stats['date_range'] = {
-                'start': valid_dates.min().strftime('%Y-%m-%d'),
-                'end': valid_dates.max().strftime('%Y-%m-%d'),
-                'days': (valid_dates.max() - valid_dates.min()).days
-            }
+    if 'scraped_at' in df.columns:
+        dates = pd.to_datetime(df['scraped_at'])
+        stats['date_range'] = {
+            'start': dates.min().strftime('%Y-%m-%d'),
+            'end': dates.max().strftime('%Y-%m-%d'),
+            'days': (dates.max() - dates.min()).days + 1
+        }
     
     # Alert type distribution
-    if 'type' in df.columns:
-        type_counts = df['type'].value_counts()
-        stats['alert_types'] = type_counts.to_dict()
+    if 'alert_type' in df.columns:
+        alert_counts = df['alert_type'].value_counts().head(10).to_dict()
+        stats['top_alert_types'] = alert_counts
     
-    # Missing values
-    stats['missing_values'] = df.isnull().sum().to_dict()
+    # Region distribution
+    if 'region' in df.columns:
+        region_counts = df['region'].value_counts().head(10).to_dict()
+        stats['top_regions'] = region_counts
+    
+    # Time-based patterns
+    if 'scraped_at' in df.columns:
+        df['hour'] = pd.to_datetime(df['scraped_at']).dt.hour
+        hourly_counts = df.groupby('hour').size()
+        stats['peak_hour'] = int(hourly_counts.idxmax()) if not hourly_counts.empty else 0
     
     return stats
 
-def generate_plain_english_insights(
-    daily_stats: pd.DataFrame,
-    anomalies: pd.DataFrame,
-    forecasts: pd.DataFrame
-) -> List[str]:
-    """Generate plain English insights from analysis results."""
-    insights = []
-    
-    if daily_stats.empty:
-        insights.append("No historical data available for analysis.")
-        return insights
-    
-    try:
-        # Recent activity
-        recent_days = daily_stats.tail(7)
-        if not recent_days.empty:
-            avg_recent = recent_days['total_alerts'].mean()
-            prev_week = daily_stats.iloc[-14:-7]['total_alerts'].mean() if len(daily_stats) >= 14 else 0
-            
-            if avg_recent > prev_week * 1.5:
-                insights.append(f"Alert activity has increased significantly in the past week (average {avg_recent:.1f} alerts/day vs {prev_week:.1f} previously).")
-            elif avg_recent < prev_week * 0.7:
-                insights.append(f"Alert activity has decreased in the past week (average {avg_recent:.1f} alerts/day vs {prev_week:.1f} previously).")
-            else:
-                insights.append(f"Alert activity remains stable at around {avg_recent:.1f} alerts per day.")
-        
-        # Anomaly insights
-        if not anomalies.empty and 'is_anomaly' in anomalies.columns:
-            recent_anomalies = anomalies.tail(30)
-            anomaly_count = recent_anomalies['is_anomaly'].sum()
-            
-            if anomaly_count > 0:
-                last_anomaly_date = recent_anomalies[recent_anomalies['is_anomaly']].index[-1]
-                insights.append(f"Detected {anomaly_count} anomalous days in the past month, most recently on {last_anomaly_date.strftime('%B %d')}.")
-            
-            # High severity anomalies
-            if 'anomaly_severity' in recent_anomalies.columns:
-                high_severity = recent_anomalies[
-                    (recent_anomalies['is_anomaly']) & 
-                    (recent_anomalies['anomaly_severity'].isin(['high', 'critical']))
-                ]
-                
-                if not high_severity.empty:
-                    insights.append(f"Found {len(high_severity)} high-severity anomalies requiring attention.")
-        
-        # Forecast insights
-        if not forecasts.empty:
-            latest_forecast = forecasts[forecasts['target'] == 'total_alerts'].tail(7)
-            
-            if not latest_forecast.empty:
-                avg_forecast = latest_forecast['forecast'].mean()
-                current_avg = daily_stats['total_alerts'].tail(7).mean()
-                
-                if avg_forecast > current_avg * 1.2:
-                    insights.append(f"Forecast predicts increased alert activity in the coming week (average {avg_forecast:.1f} alerts/day expected).")
-                elif avg_forecast < current_avg * 0.8:
-                    insights.append(f"Forecast predicts decreased alert activity in the coming week (average {avg_forecast:.1f} alerts/day expected).")
-        
-        # Alert type distribution
-        if 'type' in daily_stats.columns:
-            # Get recent alert type distribution
-            alert_type_cols = [col for col in daily_stats.columns if col in [
-                'flood', 'storm', 'wind', 'winter', 'fire', 'heat', 'cold'
-            ]]
-            
-            if alert_type_cols:
-                recent_types = daily_stats[alert_type_cols].tail(7).sum()
-                dominant_type = recent_types.idxmax()
-                dominant_count = recent_types.max()
-                
-                if dominant_count > 0:
-                    insights.append(f"Most frequent alert type recently: {dominant_type.capitalize()} alerts.")
-        
-        # Seasonal patterns
-        if 'month' in daily_stats.columns and len(daily_stats) > 365:
-            current_month = datetime.now().month
-            monthly_avg = daily_stats.groupby('month')['total_alerts'].mean()
-            
-            if current_month in monthly_avg.index:
-                current_month_avg = monthly_avg[current_month]
-                yearly_avg = monthly_avg.mean()
-                
-                if current_month_avg > yearly_avg * 1.3:
-                    insights.append(f"Current month typically sees higher than average alert activity ({current_month_avg:.1f} vs yearly average {yearly_avg:.1f}).")
-        
-    except Exception as e:
-        logger.error(f"Error generating insights: {str(e)}")
-        insights.append("Analysis complete. Review dashboard for detailed metrics.")
-    
-    # Ensure we always have at least one insight
-    if not insights:
-        insights.append("System operational. Monitoring weather alerts for anomalies.")
-    
-    return insights
+def generate_timestamp() -> str:
+    """Generate current timestamp string."""
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-def format_number(value: float) -> str:
-    """Format numbers for display."""
-    if pd.isna(value):
-        return "N/A"
-    
-    if value >= 1_000_000:
-        return f"{value/1_000_000:.1f}M"
-    elif value >= 1_000:
-        return f"{value/1_000:.1f}K"
-    elif value == 0:
-        return "0"
-    elif abs(value) < 0.01:
-        return f"{value:.2e}"
-    elif abs(value) < 1:
-        return f"{value:.3f}"
-    elif abs(value) < 100:
-        return f"{value:.1f}"
-    else:
-        return f"{value:.0f}"
-
-def calculate_performance_change(current: float, previous: float) -> Dict[str, Any]:
-    """Calculate performance change metrics."""
-    if previous == 0:
-        return {
-            'change': 0,
-            'percentage': 0,
-            'direction': 'neutral',
-            'significant': False
-        }
-    
-    change = current - previous
-    percentage = (change / previous) * 100
-    
-    direction = 'increase' if change > 0 else 'decrease' if change < 0 else 'neutral'
-    significant = abs(percentage) > 10  # More than 10% change is significant
-    
-    return {
-        'change': change,
-        'percentage': abs(percentage),
-        'direction': direction,
-        'significant': significant
-    }
-
-def retry_on_failure(max_retries: int = 3, delay: int = 5):
-    """Decorator for retrying functions on failure."""
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    logger.warning(f"Attempt {attempt + 1} failed for {func.__name__}: {str(e)}")
-                    if attempt < max_retries - 1:
-                        time.sleep(delay * (attempt + 1))
-                    else:
-                        logger.error(f"All {max_retries} attempts failed for {func.__name__}")
-                        raise
-            return None
-        return wrapper
-    return decorator
-
-def save_to_json(data: Any, filepath: str):
-    """Save data to JSON file with proper directory creation."""
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    
-    with open(filepath, 'w') as f:
-        json.dump(data, f, indent=2, default=str)
-    
-    logger.debug(f"Data saved to {filepath}")
-
-def load_from_json(filepath: str) -> Any:
-    """Load data from JSON file."""
-    try:
-        with open(filepath, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        logger.warning(f"File not found: {filepath}")
-        return {}
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON from {filepath}: {str(e)}")
-        return {}
-
-def get_data_last_updated(filepath: str) -> Optional[datetime]:
-    """Get when data was last updated."""
+def load_json_file(filepath: str) -> Optional[Dict]:
+    """Load JSON file safely."""
     try:
         if os.path.exists(filepath):
-            mtime = os.path.getmtime(filepath)
-            return datetime.fromtimestamp(mtime)
+            with open(filepath, 'r') as f:
+                return json.load(f)
     except Exception as e:
-        logger.error(f"Error getting last updated time for {filepath}: {str(e)}")
-    
+        logger.error(f"Failed to load JSON file {filepath}: {str(e)}")
     return None
 
-def create_backup(filepath: str, backup_dir: str = "backups"):
-    """Create a backup of a file."""
-    if not os.path.exists(filepath):
-        return
-    
-    os.makedirs(backup_dir, exist_ok=True)
-    
-    filename = os.path.basename(filepath)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    backup_path = os.path.join(backup_dir, f"{filename}.{timestamp}.bak")
-    
+def save_json_file(data: Dict, filepath: str):
+    """Save data to JSON file."""
     try:
-        import shutil
-        shutil.copy2(filepath, backup_path)
-        logger.info(f"Backup created: {backup_path}")
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"Saved JSON file: {filepath}")
     except Exception as e:
-        logger.error(f"Error creating backup: {str(e)}")
+        logger.error(f"Failed to save JSON file {filepath}: {str(e)}")
 
-def cleanup_old_files(directory: str, days_to_keep: int = 30, pattern: str = "*.csv"):
-    """Clean up old files in a directory."""
-    import glob
-    import time
+def format_insight_text(insight_type: str, data: Dict) -> str:
+    """Format insights into plain English text."""
+    if insight_type == 'anomaly':
+        if not data.get('key_anomalies'):
+            return data.get('summary', 'No anomalies detected.')
+        
+        text = data.get('summary', '') + "\n\n"
+        for anomaly in data.get('key_anomalies', [])[:3]:  # Top 3 anomalies
+            text += f"• On {anomaly.get('date', 'unknown date')}: {anomaly.get('reason', 'Unusual pattern')}\n"
+        
+        if data.get('recommendations'):
+            text += "\nRecommendations:\n"
+            for rec in data.get('recommendations', []):
+                text += f"• {rec}\n"
+        
+        return text
     
-    if not os.path.exists(directory):
-        return
+    elif insight_type == 'forecast':
+        if not data.get('key_forecasts'):
+            return data.get('summary', 'No forecast available.')
+        
+        text = data.get('summary', '') + "\n\nNext 7-day forecast:\n"
+        for forecast in data.get('key_forecasts', []):
+            text += f"• {forecast.get('date')}: {forecast.get('predicted_alerts')} alerts (range: {forecast.get('range')})\n"
+        
+        if data.get('recommendations'):
+            text += "\nRecommendations:\n"
+            for rec in data.get('recommendations', []):
+                text += f"• {rec}\n"
+        
+        return text
     
-    current_time = time.time()
-    cutoff_time = current_time - (days_to_keep * 24 * 60 * 60)
-    
-    for filepath in glob.glob(os.path.join(directory, pattern)):
-        try:
-            file_mtime = os.path.getmtime(filepath)
-            if file_mtime < cutoff_time:
-                os.remove(filepath)
-                logger.info(f"Removed old file: {filepath}")
-        except Exception as e:
-            logger.error(f"Error removing file {filepath}: {str(e)}")
+    return str(data)
 
-if __name__ == "__main__":
-    # Test the helper functions
-    setup_logging()
+def check_data_freshness(filepath: str, max_age_hours: int = 2) -> bool:
+    """Check if data file is fresh."""
+    if not os.path.exists(filepath):
+        return False
     
-    # Create a test dataframe
-    test_df = pd.DataFrame({
-        'date': pd.date_range('2024-01-01', periods=10),
-        'value': range(10)
-    })
+    file_mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+    age_hours = (datetime.now() - file_mtime).total_seconds() / 3600
     
-    stats = calculate_statistics(test_df)
-    print(json.dumps(stats, indent=2))
+    return age_hours <= max_age_hours
+
+def cleanup_old_files(directory: str, pattern: str, max_age_days: int = 30):
+    """Clean up old files from directory."""
+    try:
+        now = datetime.now()
+        for filename in os.listdir(directory):
+            if pattern in filename:
+                filepath = os.path.join(directory, filename)
+                file_mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+                age_days = (now - file_mtime).days
+                
+                if age_days > max_age_days:
+                    os.remove(filepath)
+                    logger.info(f"Removed old file: {filepath}")
+    except Exception as e:
+        logger.error(f"Failed to cleanup files: {str(e)}")
