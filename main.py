@@ -1,155 +1,103 @@
 #!/usr/bin/env python3
 """
-Main orchestration script for the Weather Anomaly Detection System.
-Runs the complete pipeline: scraping → preprocessing → ML → dashboard.
+Streamlit-ready entry point for Weather Anomaly Detection System.
+Wraps existing main.py backend functionality for cloud deployment.
 """
-import os
+import streamlit as st
 import sys
-import time
+import os
 import logging
-from datetime import datetime, timedelta
-import schedule
-from typing import Dict, Any
-import json
+from datetime import datetime
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from scraping.scrape_weather_alerts import main as scrape_main
-from preprocessing.preprocess_text import preprocess_pipeline
-from ml.anomaly_detection import run_anomaly_detection
-from ml.forecast_model import run_forecasting
-from utils.helpers import setup_logging, generate_plain_english_insights, save_to_json
+# Import your backend modules
+try:
+    from scraping.scrape_weather_alerts import main as scrape_main
+    from preprocessing.preprocess_text import preprocess_pipeline
+    from ml.anomaly_detection import run_anomaly_detection
+    from ml.forecast_model import run_forecasting
+    from utils.helpers import setup_logging, generate_plain_english_insights, save_to_json, cleanup_old_files
+except ModuleNotFoundError as e:
+    st.error(f"Module import error: {e}")
+    raise
 
 # Setup logging
 setup_logging('logs/system.log')
 logger = logging.getLogger(__name__)
 
-# Import pandas late to avoid early import issues
-import pandas as pd
+st.set_page_config(page_title="Weather Anomaly Detection", layout="wide")
 
-# ------------------------------
-# WeatherAnomalySystem class
-# ------------------------------
-class WeatherAnomalySystem:
-    """Main orchestration class for the weather anomaly detection system."""
-    
-    def __init__(self, config_path: str = None):
-        self.config = self.load_config(config_path)
-        self.running = False
-        
-        # File paths
-        self.raw_data_path = "data/raw/weather_alerts_raw.csv"
-        self.processed_data_path = "data/processed/weather_alerts_processed.csv"
-        self.daily_data_path = "data/processed/weather_alerts_daily.csv"
-        self.anomaly_model_path = "models/isolation_forest.pkl"
-        self.forecast_model_path = "models/xgboost_forecast.pkl"
-        self.anomaly_output_path = "data/output/anomaly_results.csv"
-        self.forecast_output_path = "data/output/forecast_results.csv"
+st.title("Weather Anomaly Detection System")
 
-    # ----------------------------
-    # Existing methods here
-    # (run_scraping, run_preprocessing, run_anomaly_detection_pipeline,
-    #  run_forecasting_pipeline, generate_insights, run_complete_pipeline,
-    #  cleanup_old_data, schedule_jobs, run_scheduler)
-    # ----------------------------
+# Sidebar controls
+st.sidebar.header("Pipeline Controls")
+if st.sidebar.button("Run Full Pipeline"):
+    st.info("Running full pipeline...")
+    try:
+        # Step 1: Scrape
+        st.write("Starting scraping...")
+        scrape_main()
+        st.success("Scraping completed.")
 
-    def start_dashboard(self):
-        """Start the Streamlit dashboard."""
-        if not self.config.get('enable_dashboard', True):
-            logger.info("Dashboard disabled in configuration")
-            return
-        
-        logger.info(f"Starting dashboard on port {self.config.get('dashboard_port', 8501)}...")
-        
-        import subprocess
-        subprocess.run([
-            sys.executable, "-m", "streamlit", "run", "src/dashboard/app.py",
-            "--server.port", str(self.config.get('dashboard_port', 8501))
-        ])
+        # Step 2: Preprocess
+        st.write("Preprocessing data...")
+        preprocess_pipeline(
+            "data/raw/weather_alerts_raw.csv",
+            "data/processed/weather_alerts_processed.csv"
+        )
+        st.success("Preprocessing completed.")
 
-# ------------------------------
-# Main function
-# ------------------------------
-def main():
-    """Main entry point for the system."""
+        # Step 3: Anomaly detection
+        st.write("Running anomaly detection...")
+        run_anomaly_detection(
+            "data/processed/weather_alerts_daily.csv",
+            "data/output/anomaly_results.csv",
+            "models/isolation_forest.pkl"
+        )
+        st.success("Anomaly detection completed.")
 
-    # ----------------------------
-    # DEPLOYMENT/STREAMLIT SAFE LOGIC
-    # ----------------------------
-    # If no CLI arguments are provided, or Streamlit is running, start dashboard
-    if len(sys.argv) == 1 or 'streamlit' in sys.argv[0].lower():
-        system = WeatherAnomalySystem()
-        system.start_dashboard()
-        return
+        # Step 4: Forecasting
+        st.write("Running forecasting...")
+        run_forecasting(
+            "data/processed/weather_alerts_daily.csv",
+            "data/output/forecast_results.csv",
+            "models/xgboost_forecast.pkl"
+        )
+        st.success("Forecasting completed.")
 
-    # ---------- Normal CLI parsing ----------
-    import argparse
-    
-    parser = argparse.ArgumentParser(
-        description='Weather Anomaly Detection System',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s run pipeline      # Run the complete pipeline once
-  %(prog)s run scheduler     # Run with scheduled jobs
-  %(prog)s scrape            # Run only scraping
-  %(prog)s preprocess        # Run only preprocessing
-  %(prog)s detect-anomalies  # Run only anomaly detection
-  %(prog)s forecast          # Run only forecasting
-        """
-    )
+        # Step 5: Generate insights
+        st.write("Generating insights...")
+        daily_stats_path = "data/processed/weather_alerts_daily.csv"
+        anomalies_path = "data/output/anomaly_results.csv"
+        forecasts_path = "data/output/forecast_results.csv"
 
-    parser.add_argument(
-        'command',
-        choices=[
-            'run', 'pipeline', 'scheduler',
-            'scrape', 'preprocess', 'detect-anomalies', 'forecast',
-            'dashboard', 'cleanup', 'insights'
-        ],
-        help='Command to execute'
-    )
+        import pandas as pd
+        daily_stats = pd.read_csv(daily_stats_path) if os.path.exists(daily_stats_path) else pd.DataFrame()
+        anomalies = pd.read_csv(anomalies_path) if os.path.exists(anomalies_path) else pd.DataFrame()
+        forecasts = pd.read_csv(forecasts_path) if os.path.exists(forecasts_path) else pd.DataFrame()
 
-    parser.add_argument(
-        '--config',
-        default='config.json',
-        help='Path to configuration file'
-    )
+        insights = generate_plain_english_insights(daily_stats, anomalies, forecasts)
+        save_to_json({
+            "generated_at": datetime.now().isoformat(),
+            "insights": insights
+        }, "data/output/insights.json")
 
-    parser.add_argument(
-        '--mode',
-        choices=['once', 'continuous'],
-        default='once',
-        help='Execution mode'
-    )
+        st.success("Insights generated!")
 
-    args = parser.parse_args()
+    except Exception as e:
+        st.error(f"Pipeline failed: {e}")
 
-    # Initialize system
-    system = WeatherAnomalySystem(args.config)
+# Sidebar: Cleanup
+if st.sidebar.button("Cleanup Old Data"):
+    st.info("Cleaning up old files...")
+    try:
+        cleanup_old_files('data/raw', days_to_keep=90)
+        cleanup_old_files('logs', days_to_keep=30, pattern='*.log')
+        st.success("Cleanup completed.")
+    except Exception as e:
+        st.error(f"Cleanup failed: {e}")
 
-    # Execute command mapping
-    command_map = {
-        'run': system.run_complete_pipeline,
-        'pipeline': system.run_complete_pipeline,
-        'scheduler': system.run_scheduler,
-        'scrape': system.run_scraping,
-        'preprocess': system.run_preprocessing,
-        'detect-anomalies': system.run_anomaly_detection_pipeline,
-        'forecast': system.run_forecasting_pipeline,
-        'dashboard': system.start_dashboard,
-        'cleanup': system.cleanup_old_data,
-        'insights': system.generate_insights
-    }
-
-    func = command_map.get(args.command)
-    if func:
-        func()
-    else:
-        parser.print_help()
-
-# ------------------------------
-# Entry point
-# ------------------------------
-if __name__ == "__main__":
-    main()
+st.markdown("---")
+st.info("Use the left sidebar to run pipelines or cleanup operations.")
