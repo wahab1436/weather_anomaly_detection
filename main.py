@@ -7,6 +7,8 @@ import streamlit as st
 import sys
 import os
 import logging
+from datetime import datetime
+import pandas as pd
 
 # Add src to Python path
 SRC_PATH = os.path.join(os.path.dirname(__file__), 'src')
@@ -25,7 +27,12 @@ try:
     from preprocessing.preprocess_text import preprocess_pipeline
     from ml.anomaly_detection import run_anomaly_detection
     from ml.forecast_model import run_forecasting
-    from utils.helpers import setup_logging, generate_plain_english_insights, save_to_json, cleanup_old_files
+    from utils.helpers import (
+        setup_logging, 
+        generate_plain_english_insights, 
+        save_to_json, 
+        cleanup_old_files
+    )
 except ModuleNotFoundError as e:
     st.error(f"Backend module import error: {e}")
     raise
@@ -79,8 +86,7 @@ if st.sidebar.button("Run Full Pipeline"):
 
         # Step 5: Generate insights
         st.write("Generating insights...")
-        import pandas as pd
-
+        
         daily_stats_path = os.path.join(SRC_PATH, '../data/processed/weather_alerts_daily.csv')
         anomalies_path = os.path.join(SRC_PATH, '../data/output/anomaly_results.csv')
         forecasts_path = os.path.join(SRC_PATH, '../data/output/forecast_results.csv')
@@ -96,9 +102,11 @@ if st.sidebar.button("Run Full Pipeline"):
         }, os.path.join(SRC_PATH, '../data/output/insights.json'))
 
         st.success("Insights generated!")
+        st.success("Full pipeline completed successfully!")
 
     except Exception as e:
         st.error(f"Pipeline failed: {e}")
+        logger.error(f"Pipeline failed: {str(e)}", exc_info=True)
 
 # Sidebar: Cleanup
 if st.sidebar.button("Cleanup Old Data"):
