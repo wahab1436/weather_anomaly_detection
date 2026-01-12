@@ -19,11 +19,26 @@ import os
 
 # Download NLTK resources
 try:
-    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('tokenizers/punkt_tab')
+except:
+    try:
+        nltk.download('punkt_tab', quiet=True)
+    except:
+        nltk.download('punkt', quiet=True)
+
+try:
     nltk.data.find('corpora/stopwords')
 except:
-    nltk.download('punkt', quiet=True)
     nltk.download('stopwords', quiet=True)
+
+# Try to download averaged_perceptron_tagger for better tokenization
+try:
+    nltk.data.find('taggers/averaged_perceptron_tagger')
+except:
+    try:
+        nltk.download('averaged_perceptron_tagger', quiet=True)
+    except:
+        pass
 
 logger = logging.getLogger(__name__)
 
