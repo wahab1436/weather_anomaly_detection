@@ -96,43 +96,62 @@ def generate_plain_english_insights(
         return insights
     
     try:
+        # Ensure total_alerts column exists
+        if 'total_alerts' not in daily_stats.columns:
+            insights.append("System operational. Monitoring weather alerts for anomalies.")
+            return insights
+        
         # Recent activity
         recent_days = daily_stats.tail(7)
-        if not recent_days.empty:
+        if not recent_days.empty and 'total_alerts' in recent_days.columns:
             avg_recent = recent_days['total_alerts'].mean()
             prev_week = daily_stats.iloc[-14:-7]['total_alerts'].mean() if len(daily_stats) >= 14 else 0
             
-            if avg_recent > prev_week * 1.5:
+            if avg_recent > prev_week * 1.5 and prev_week > 0:
                 insights.append(f"Alert activity has increased significantly in the past week (average {avg_recent:.1f} alerts/day vs {prev_week:.1f} previously).")
-            elif avg_recent < prev_week * 0.7:
+            elif avg_recent < prev_week * 0.7 and prev_week > 0:
                 insights.append(f"Alert activity has decreased in the past week (average {avg_recent:.1f} alerts/day vs {prev_week:.1f} previously).")
             else:
                 insights.append(f"Alert activity remains stable at around {avg_recent:.1f} alerts per day.")
         
         # Anomaly insights
         if not anomalies.empty and 'is_anomaly' in anomalies.columns:
+            # Ensure issued_date is datetime if it exists
+            if 'issued_date' in anomalies.columns:
+                anomalies = anomalies.copy()
+                anomalies['issued_date'] = pd.to_datetime(anomalies['issued_date'], errors='coerce')
+                
+                # Set as index if not already
+                if not isinstance(anomalies.index, pd.DatetimeIndex):
+                    anomalies = anomalies.set_index('issued_date')
+            
             recent_anomalies = anomalies.tail(30)
             anomaly_count = recent_anomalies['is_anomaly'].sum()
             
             if anomaly_count > 0:
-                last_anomaly_date = recent_anomalies[recent_anomalies['is_anomaly']].index[-1]
-                insights.append(f"Detected {anomaly_count} anomalous days in the past month, most recently on {last_anomaly_date.strftime('%B %d')}.")
-            
-            # High severity anomalies
-            if 'anomaly_severity' in recent_anomalies.columns:
-                high_severity = recent_anomalies[
-                    (recent_anomalies['is_anomaly']) & 
-                    (recent_anomalies['anomaly_severity'].isin(['high', 'critical']))
-                ]
+                anomaly_dates = recent_anomalies[recent_anomalies['is_anomaly']]
+                if not anomaly_dates.empty:
+                    if isinstance(anomaly_dates.index, pd.DatetimeIndex):
+                        last_anomaly_date = anomaly_dates.index[-1]
+                        insights.append(f"Detected {anomaly_count} anomalous days in the past month, most recently on {last_anomaly_date.strftime('%B %d')}.")
+                    else:
+                        insights.append(f"Detected {anomaly_count} anomalous days in the past month.")
                 
-                if not high_severity.empty:
-                    insights.append(f"Found {len(high_severity)} high-severity anomalies requiring attention.")
+                # High severity anomalies
+                if 'anomaly_severity' in recent_anomalies.columns:
+                    high_severity = recent_anomalies[
+                        (recent_anomalies['is_anomaly']) & 
+                        (recent_anomalies['anomaly_severity'].isin(['high', 'critical']))
+                    ]
+                    
+                    if not high_severity.empty:
+                        insights.append(f"Found {len(high_severity)} high-severity anomalies requiring attention.")
         
         # Forecast insights
-        if not forecasts.empty:
+        if not forecasts.empty and 'target' in forecasts.columns and 'forecast' in forecasts.columns:
             latest_forecast = forecasts[forecasts['target'] == 'total_alerts'].tail(7)
             
-            if not latest_forecast.empty:
+            if not latest_forecast.empty and 'total_alerts' in daily_stats.columns:
                 avg_forecast = latest_forecast['forecast'].mean()
                 current_avg = daily_stats['total_alerts'].tail(7).mean()
                 
@@ -142,14 +161,13 @@ def generate_plain_english_insights(
                     insights.append(f"Forecast predicts decreased alert activity in the coming week (average {avg_forecast:.1f} alerts/day expected).")
         
         # Alert type distribution
-        if 'type' in daily_stats.columns:
-            # Get recent alert type distribution
-            alert_type_cols = [col for col in daily_stats.columns if col in [
-                'flood', 'storm', 'wind', 'winter', 'fire', 'heat', 'cold'
-            ]]
-            
-            if alert_type_cols:
-                recent_types = daily_stats[alert_type_cols].tail(7).sum()
+        alert_type_cols = [col for col in daily_stats.columns if col in [
+            'flood', 'storm', 'wind', 'winter', 'fire', 'heat', 'cold'
+        ]]
+        
+        if alert_type_cols:
+            recent_types = daily_stats[alert_type_cols].tail(7).sum()
+            if recent_types.sum() > 0:
                 dominant_type = recent_types.idxmax()
                 dominant_count = recent_types.max()
                 
@@ -157,11 +175,11 @@ def generate_plain_english_insights(
                     insights.append(f"Most frequent alert type recently: {dominant_type.capitalize()} alerts.")
         
         # Seasonal patterns
-        if 'month' in daily_stats.columns and len(daily_stats) > 365:
+        if 'month' in daily_stats.columns and 'total_alerts' in daily_stats.columns and len(daily_stats) > 365:
             current_month = datetime.now().month
             monthly_avg = daily_stats.groupby('month')['total_alerts'].mean()
             
-            if current_month in monthly_avg.index:
+            if current_month in monthly_avg.index and not monthly_avg.empty:
                 current_month_avg = monthly_avg[current_month]
                 yearly_avg = monthly_avg.mean()
                 
@@ -169,7 +187,7 @@ def generate_plain_english_insights(
                     insights.append(f"Current month typically sees higher than average alert activity ({current_month_avg:.1f} vs yearly average {yearly_avg:.1f}).")
         
     except Exception as e:
-        logger.error(f"Error generating insights: {str(e)}")
+        logger.error(f"Error generating insights: {str(e)}", exc_info=True)
         insights.append("Analysis complete. Review dashboard for detailed metrics.")
     
     # Ensure we always have at least one insight
@@ -242,12 +260,19 @@ def retry_on_failure(max_retries: int = 3, delay: int = 5):
 
 def save_to_json(data: Any, filepath: str):
     """Save data to JSON file with proper directory creation."""
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    
-    with open(filepath, 'w') as f:
-        json.dump(data, f, indent=2, default=str)
-    
-    logger.debug(f"Data saved to {filepath}")
+    try:
+        # Create directory if it doesn't exist
+        dir_path = os.path.dirname(filepath)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+        
+        logger.debug(f"Data saved to {filepath}")
+    except Exception as e:
+        logger.error(f"Error saving JSON to {filepath}: {str(e)}")
+        raise
 
 def load_from_json(filepath: str) -> Any:
     """Load data from JSON file."""
@@ -293,22 +318,26 @@ def create_backup(filepath: str, backup_dir: str = "backups"):
 def cleanup_old_files(directory: str, days_to_keep: int = 30, pattern: str = "*.csv"):
     """Clean up old files in a directory."""
     import glob
-    import time
     
     if not os.path.exists(directory):
+        logger.warning(f"Directory does not exist: {directory}")
         return
     
     current_time = time.time()
     cutoff_time = current_time - (days_to_keep * 24 * 60 * 60)
     
+    files_removed = 0
     for filepath in glob.glob(os.path.join(directory, pattern)):
         try:
             file_mtime = os.path.getmtime(filepath)
             if file_mtime < cutoff_time:
                 os.remove(filepath)
                 logger.info(f"Removed old file: {filepath}")
+                files_removed += 1
         except Exception as e:
             logger.error(f"Error removing file {filepath}: {str(e)}")
+    
+    logger.info(f"Cleanup complete. Removed {files_removed} files from {directory}")
 
 if __name__ == "__main__":
     # Test the helper functions
