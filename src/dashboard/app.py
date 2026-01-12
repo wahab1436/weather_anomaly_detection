@@ -14,13 +14,8 @@ import json
 from typing import Dict, List, Optional
 import logging
 
-# Configure page
-st.set_page_config(
-    page_title="Weather Anomaly Detection Dashboard",
-    page_icon=None,
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Note: st.set_page_config() should only be called once in main.py
+# Remove duplicate configuration if running as standalone
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -627,25 +622,25 @@ def main():
                 data['daily_stats'],
                 data['anomalies']
             )
-            st.plotly_chart(fig_timeline, use_container_width=True)
+            st.plotly_chart(fig_timeline, use_container_width=True, key='timeline_overview')
         
         with col2:
             # Alert type distribution
             fig_types = create_alert_type_chart(data['daily_stats'])
-            st.plotly_chart(fig_types, use_container_width=True)
+            st.plotly_chart(fig_types, use_container_width=True, key='alert_types_overview')
         
         # Charts row 2
         col3, col4 = st.columns(2)
         
         with col3:
             # Forecast chart
-            fig_forecast = create_forecast_chart(data['forecasts'])
-            st.plotly_chart(fig_forecast, use_container_width=True)
+            fig_forecast_overview = create_forecast_chart(data['forecasts'])
+            st.plotly_chart(fig_forecast_overview, use_container_width=True, key='forecast_overview')
         
         with col4:
             # Region heatmap
             fig_heatmap = create_region_heatmap(data['daily_stats'])
-            st.plotly_chart(fig_heatmap, use_container_width=True)
+            st.plotly_chart(fig_heatmap, use_container_width=True, key='heatmap_overview')
         
         # Recent data table
         if not data['daily_stats'].empty:
@@ -741,7 +736,7 @@ def main():
                     height=500
                 )
                 
-                st.plotly_chart(fig_anomaly_detailed, use_container_width=True)
+                st.plotly_chart(fig_anomaly_detailed, use_container_width=True, key='anomaly_detailed')
             
             # Anomaly table
             display_anomaly_table(data['anomalies'])
@@ -768,8 +763,8 @@ def main():
                     st.metric("Min Forecast", f"{min_forecast:.0f}")
             
             # Forecast chart
-            fig_forecast = create_forecast_chart(data['forecasts'])
-            st.plotly_chart(fig_forecast, use_container_width=True)
+            fig_forecast_tab = create_forecast_chart(data['forecasts'])
+            st.plotly_chart(fig_forecast_tab, use_container_width=True, key='forecast_tab')
             
             # Forecast table
             if 'date' in data['forecasts'].columns:
