@@ -554,11 +554,17 @@ def main():
         # Date range selector
         st.markdown("### Date Range")
         if not data['daily_stats'].empty:
-            min_date = data['daily_stats'].index.min()
-            max_date = data['daily_stats'].index.max()
+            min_date = data['daily_stats'].index.min().date()
+            max_date = data['daily_stats'].index.max().date()
+            
+            # Calculate default start date (30 days ago or min_date, whichever is later)
+            default_start = max(min_date, (datetime.now().date() - timedelta(days=30)))
+            if default_start > max_date:
+                default_start = min_date
+            
             date_range = st.date_input(
                 "Select date range",
-                value=(max_date - timedelta(days=30), max_date),
+                value=(default_start, max_date),
                 min_value=min_date,
                 max_value=max_date
             )
