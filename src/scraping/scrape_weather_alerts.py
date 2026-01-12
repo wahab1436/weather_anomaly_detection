@@ -46,6 +46,7 @@ class WeatherAlertScraper:
                 response = self.session.get(url, timeout=30)
                 response.raise_for_status()
                 
+                # Check if we're being rate limited
                 if response.status_code == 429:
                     wait_time = 60 * (attempt + 1)
                     logger.warning(f"Rate limited. Waiting {wait_time} seconds.")
@@ -68,9 +69,7 @@ class WeatherAlertScraper:
     def parse_alert_entry(self, alert_div) -> Optional[Dict]:
         """Parse individual alert entry from the alerts page."""
         try:
-            if not alert_div:
-                return None
-                
+            # Extract alert title and link
             title_elem = alert_div.find('a', class_='alert-title')
             if not title_elem:
                 return None
@@ -78,6 +77,7 @@ class WeatherAlertScraper:
             alert_title = title_elem.text.strip()
             alert_link = urljoin(self.base_url, title_elem.get('href', ''))
             
+            # Extract alert details
             details = {}
             rows = alert_div.find_all('div', class_='row')
             
@@ -88,9 +88,11 @@ class WeatherAlertScraper:
                     value = cols[1].text.strip()
                     details[key] = value
             
+            # Extract alert text
             alert_text_div = alert_div.find('div', class_='alert-text')
             alert_text = alert_text_div.text.strip() if alert_text_div else ""
             
+            # Parse date
             issued_date = None
             if 'issued' in details:
                 try:
@@ -100,11 +102,14 @@ class WeatherAlertScraper:
             else:
                 issued_date = datetime.now(pytz.UTC)
             
+            # Determine alert type from title
             alert_type = self._classify_alert_type(alert_title)
+            
+            # Extract region/state
             region = details.get('area', 'Unknown')
             
             return {
-                'alert_id': f"{int(issued_date.timestamp())}_{hash(alert_title) % 1000000}",
+                'alert_id': f"{issued_date.timestamp()}_{hash(alert_title) % 1000000}",
                 'title': alert_title,
                 'text': alert_text,
                 'type': alert_type,
@@ -125,9 +130,6 @@ class WeatherAlertScraper:
     
     def _classify_alert_type(self, title: str) -> str:
         """Classify alert type based on title keywords."""
-        if not title:
-            return 'other'
-            
         title_lower = title.lower()
         
         alert_types = {
@@ -155,46 +157,41 @@ class WeatherAlertScraper:
         soup = self.scrape_alerts_page(alerts_url)
         
         if not soup:
-            logger.warning("Failed to scrape alerts page")
-            return []  # Return empty list, not None
+            return []
         
+        # Find alert containers
         alert_containers = soup.find_all('div', class_='alert-item')
-        
-        # FIX: Check if alert_containers is not None
-        if alert_containers is None:
-            alert_containers = []
-            
-        logger.info(f"Found {len(alert_containers)} alert containers")
-        
         alerts = []
+        
+        logger.info(f"Found {len(alert_containers)} alert containers")
         
         for container in alert_containers:
             alert_data = self.parse_alert_entry(container)
             if alert_data:
                 alerts.append(alert_data)
         
+        # If no structured alerts found, try alternative parsing
         if not alerts:
             alerts = self._fallback_parsing(soup)
         
         logger.info(f"Successfully parsed {len(alerts)} alerts")
-        return alerts  # Always returns a list (empty or with items)
+        return alerts
     
     def _fallback_parsing(self, soup: BeautifulSoup) -> List[Dict]:
         """Fallback parsing method if structured parsing fails."""
         alerts = []
         
-        if not soup:
-            return alerts
-            
+        # Look for any alert-like content
         alert_sections = soup.find_all(['div', 'section'], class_=lambda x: x and 'alert' in x.lower())
         
         for section in alert_sections:
+            # Try to extract text
             text = section.get_text(strip=True, separator=' ')
-            if text and len(text) > 50:
+            if len(text) > 50:  # Reasonable minimum length for an alert
                 alert_data = {
                     'alert_id': f"fallback_{hash(text) % 1000000}",
                     'title': 'Weather Alert',
-                    'text': text[:1000],
+                    'text': text[:1000],  # Limit text length
                     'type': 'other',
                     'region': 'Unknown',
                     'issued_date': datetime.now(pytz.UTC),
@@ -210,66 +207,72 @@ class WeatherAlertScraper:
         
         return alerts
     
-    def save_alerts_to_csv(self, alerts: List[Dict], filepath: str) -> int:
-        """Save alerts to CSV and return count saved."""
+    def scrape_forecast_discussions(self) -> List[Dict]:
+        """Scrape forecast discussions from WRH text products."""
+        discussions_url = "https://www.weather.gov/wrh/TextProduct"
+        soup = self.scrape_alerts_page(discussions_url)
+        
+        if not soup:
+            return []
+        
+        discussions = []
+        # Implementation depends on the actual structure of the page
+        # This is a placeholder - you'll need to inspect the actual page structure
+        
+        return discussions
+    
+    def save_alerts_to_csv(self, alerts: List[Dict], filepath: str):
+        """Save alerts to CSV with proper handling of existing data."""
         if not alerts:
             logger.warning("No alerts to save")
-            return 0  # Return 0, not None
+            return
         
         df = pd.DataFrame(alerts)
         
+        # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
+        # Append to existing file if it exists
         if os.path.exists(filepath):
-            try:
-                existing_df = pd.read_csv(filepath)
-                combined_df = pd.concat([existing_df, df]).drop_duplicates(
-                    subset=['alert_id'], 
-                    keep='last'
-                )
-                combined_df.to_csv(filepath, index=False)
-                new_count = len(df) - len(existing_df)
-                logger.info(f"Appended {new_count} new alerts to {filepath}")
-                return max(new_count, 0)  # Ensure non-negative
-            except Exception as e:
-                logger.error(f"Error appending to existing file: {str(e)}")
-                df.to_csv(filepath, index=False)
-                logger.info(f"Saved {len(df)} alerts to {filepath}")
-                return len(df)
+            existing_df = pd.read_csv(filepath)
+            # Remove duplicates based on alert_id
+            combined_df = pd.concat([existing_df, df]).drop_duplicates(
+                subset=['alert_id'], 
+                keep='last'
+            )
+            combined_df.to_csv(filepath, index=False)
+            logger.info(f"Appended {len(df)} new alerts to {filepath}")
         else:
             df.to_csv(filepath, index=False)
             logger.info(f"Saved {len(df)} alerts to {filepath}")
-            return len(df)
 
-def main() -> int:
-    """Main scraping function. Returns number of alerts scraped."""
+def main():
+    """Main scraping function to be called by scheduler."""
     scraper = WeatherAlertScraper()
-    alert_count = 0
     
     try:
+        # Scrape alerts
         alerts = scraper.scrape_all_alerts()
         
         if alerts:
+            # Define file path
             timestamp = datetime.now().strftime('%Y%m%d')
             filepath = f"data/raw/weather_alerts_{timestamp}.csv"
             
-            count1 = scraper.save_alerts_to_csv(alerts, filepath)
+            # Save alerts
+            scraper.save_alerts_to_csv(alerts, filepath)
             
+            # Also save to main raw file for dashboard
             main_filepath = "data/raw/weather_alerts_raw.csv"
-            count2 = scraper.save_alerts_to_csv(alerts, main_filepath)
+            scraper.save_alerts_to_csv(alerts, main_filepath)
             
-            alert_count = max(count1, count2, len(alerts))
-            logger.info(f"Scraping completed successfully. Processed {alert_count} alerts.")
+            logger.info(f"Scraping completed successfully. Saved {len(alerts)} alerts.")
         else:
             logger.warning("No alerts were scraped.")
             
     except Exception as e:
         logger.error(f"Scraping failed: {str(e)}")
-        return 0  # Return 0 on failure, not None
-    
-    # FIX: Always return an integer, never None
-    return alert_count
+        raise
 
 if __name__ == "__main__":
-    result = main()
-    print(f"Scraping completed. Alerts processed: {result}")
+    main()
