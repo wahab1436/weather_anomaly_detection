@@ -322,4 +322,3 @@ if __name__ == "__main__":
     
     stats = calculate_statistics(test_df)
     print(json.dumps(stats, indent=2))
-
