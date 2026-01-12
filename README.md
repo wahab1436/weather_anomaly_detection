@@ -107,7 +107,7 @@ The goal of this project is to **detect and forecast unusual weather alerts** an
 
 ---
 
-## Senior-Level Features
+## Features
 
 - Modular, professional folder structure  
 - Production-level caching and hourly refresh  
@@ -116,28 +116,5 @@ The goal of this project is to **detect and forecast unusual weather alerts** an
 - Pre-trained ML models for fast anomaly detection and forecasting  
 - End-to-end flow: Scraping → Preprocessing → ML → Dashboard → Insights  
 
----
 
-## Installation
 
-```bash
-git clone https://github.com/yourusername/weather_anomaly_dashboard.git
-cd weather_anomaly_dashboard
-python -m venv venv
-source venv/bin/activate   # Linux/macOS
-venv\Scripts\activate      # Windows
-pip install -r requirements.txt
-Usage
-Run the dashboard:
-
-bash
-Copy code
-streamlit run src/dashboard/app.py
-Update data manually (optional):
-
-bash
-Copy code
-python src/scraping/scrape_weather_alerts.py
-python src/preprocessing/preprocess_text.py
-python src/ml/anomaly_detection.py
-python src/ml/forecast_model.py
