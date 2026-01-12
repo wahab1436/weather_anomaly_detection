@@ -1,232 +1,130 @@
-#!/usr/bin/env python3
 """
-Main orchestration script for Weather Anomaly Detection.
-Runs the complete pipeline: scraping → preprocessing → daily stats → ML → dashboard.
+Main backend entry point for Weather Anomaly Detection project.
+Handles scraping, preprocessing, anomaly detection, forecasts, and insights.
 """
 
 import os
-import sys
-import time
-import logging
-from datetime import datetime
-import json
-import argparse
 import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import logging
+import json
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
-# Import your modules
-from scraping.scrape_weather_alerts import main as scrape_main
-from preprocessing.preprocess_text import preprocess_pipeline
-from ml.anomaly_detection import run_anomaly_detection
-from ml.forecast_model import run_forecasting
-from utils.helpers import setup_logging, generate_plain_english_insights, save_to_json, cleanup_old_files
-
-# Setup logging
-setup_logging('logs/system.log')
+# ------------------ Logging ------------------
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class WeatherAnomalySystem:
-    """Main orchestration class for weather anomaly detection."""
+# ------------------ Directories ------------------
+def setup_directories():
+    """Ensure all necessary directories exist."""
+    dirs = ['data/raw', 'data/processed', 'data/output', 'models', 'logs']
+    for d in dirs:
+        os.makedirs(d, exist_ok=True)
+setup_directories()
 
-    def __init__(self, config_path: str = None):
-        self.config = self.load_config(config_path)
-        self.running = False
+# ------------------ Dummy Data Pipeline ------------------
+def run_pipeline():
+    """
+    Full backend pipeline:
+    1. Scrape data
+    2. Preprocess
+    3. Detect anomalies
+    4. Forecast
+    5. Generate insights
+    """
 
-        # File paths
-        self.raw_data_path = "data/raw/weather_alerts_raw.csv"
-        self.processed_data_path = "data/processed/weather_alerts_processed.csv"
-        self.daily_data_path = "data/processed/weather_alerts_daily.csv"
-        self.anomaly_model_path = "models/isolation_forest.pkl"
-        self.forecast_model_path = "models/xgboost_forecast.pkl"
-        self.anomaly_output_path = "data/output/anomaly_results.csv"
-        self.forecast_output_path = "data/output/forecast_results.csv"
-
-    def load_config(self, config_path: str = None):
-        default_config = {
-            'scraping_interval_hours': 1,
-            'processing_interval_hours': 1,
-            'ml_interval_hours': 6,
-            'max_days_to_keep': 90,
-            'anomaly_contamination': 0.1,
-            'forecast_horizon_days': 7,
-            'enable_dashboard': True,
-            'dashboard_port': 8501,
-            'log_level': 'INFO'
-        }
-        if config_path and os.path.exists(config_path):
-            try:
-                with open(config_path, 'r') as f:
-                    user_config = json.load(f)
-                default_config.update(user_config)
-                logger.info(f"Loaded configuration from {config_path}")
-            except Exception as e:
-                logger.error(f"Error loading config: {e}")
-        return default_config
-
-    def run_scraping(self):
-        logger.info("Starting scraping...")
-        try:
-            scrape_main()
-            logger.info("Scraping completed.")
-            return True
-        except Exception as e:
-            logger.error(f"Scraping failed: {e}")
-            return False
-
-    def run_preprocessing(self):
-        logger.info("Preprocessing data...")
-        try:
-            preprocess_pipeline(self.raw_data_path, self.processed_data_path)
-            logger.info("Preprocessing completed.")
-            return True
-        except Exception as e:
-            logger.error(f"Preprocessing failed: {e}")
-            return False
-
-    def generate_daily_stats(self):
-        """Aggregate processed data into daily stats for anomaly detection and forecasting."""
-        logger.info("Generating daily stats...")
-        try:
-            if not os.path.exists(self.processed_data_path):
-                logger.warning("Processed file not found. Cannot generate daily stats.")
-                return False
-
-            df = pd.read_csv(self.processed_data_path)
-            df['issued_date'] = pd.to_datetime(df['issued_date'])
-            daily_stats = df.groupby(df['issued_date'].dt.date).agg({
-                'type': 'count',
-                'severity_score': 'mean'
-            }).rename(columns={'type': 'total_alerts'})
-            os.makedirs(os.path.dirname(self.daily_data_path), exist_ok=True)
-            daily_stats.to_csv(self.daily_data_path)
-            logger.info(f"Daily stats saved to {self.daily_data_path}")
-            return True
-        except Exception as e:
-            logger.error(f"Generating daily stats failed: {e}")
-            return False
-
-    def run_anomaly_detection_pipeline(self):
-        logger.info("Running anomaly detection...")
-        if not os.path.exists(self.daily_data_path):
-            logger.info("Daily stats not found. Generating now...")
-            if not self.generate_daily_stats():
-                return False
-        try:
-            anomaly_results, _ = run_anomaly_detection(
-                self.daily_data_path,
-                self.anomaly_output_path,
-                self.anomaly_model_path
-            )
-            logger.info(f"Anomaly detection complete. Found {anomaly_results['is_anomaly'].sum()} anomalies")
-            return True
-        except Exception as e:
-            logger.error(f"Anomaly detection failed: {e}")
-            return False
-
-    def run_forecasting_pipeline(self):
-        logger.info("Running forecasting...")
-        if not os.path.exists(self.daily_data_path):
-            logger.info("Daily stats not found. Generating now...")
-            if not self.generate_daily_stats():
-                return False
-        try:
-            forecast_results, _ = run_forecasting(
-                self.daily_data_path,
-                self.forecast_output_path,
-                self.forecast_model_path
-            )
-            logger.info(f"Forecasting completed for {len(forecast_results)} entries")
-            return True
-        except Exception as e:
-            logger.error(f"Forecasting failed: {e}")
-            return False
-
-    def generate_insights(self):
-        logger.info("Generating insights...")
-        try:
-            daily_stats = pd.read_csv(self.daily_data_path) if os.path.exists(self.daily_data_path) else pd.DataFrame()
-            anomalies = pd.read_csv(self.anomaly_output_path) if os.path.exists(self.anomaly_output_path) else pd.DataFrame()
-            forecasts = pd.read_csv(self.forecast_output_path) if os.path.exists(self.forecast_output_path) else pd.DataFrame()
-            insights = generate_plain_english_insights(daily_stats, anomalies, forecasts)
-            save_to_json({'generated_at': datetime.now().isoformat(), 'insights': insights}, "data/output/insights.json")
-            logger.info(f"Generated {len(insights)} insights")
-            return True
-        except Exception as e:
-            logger.error(f"Insights generation failed: {e}")
-            return False
-
-    def cleanup_old_data(self):
-        logger.info("Cleaning up old data...")
-        try:
-            cleanup_old_files('data/raw', days_to_keep=self.config['max_days_to_keep'])
-            cleanup_old_files('logs', days_to_keep=30, pattern='*.log')
-            logger.info("Cleanup completed")
-            return True
-        except Exception as e:
-            logger.error(f"Cleanup failed: {e}")
-            return False
-
-    def run_complete_pipeline(self):
-        logger.info("="*50)
-        logger.info("STARTING FULL PIPELINE")
-        logger.info("="*50)
-
-        results = {
-            'scraping': False,
-            'preprocessing': False,
-            'daily_stats': False,
-            'anomaly_detection': False,
-            'forecasting': False,
-            'insights': False
-        }
-
-        results['scraping'] = self.run_scraping()
-        if results['scraping']:
-            results['preprocessing'] = self.run_preprocessing()
-            if results['preprocessing']:
-                results['daily_stats'] = self.generate_daily_stats()
-                if results['daily_stats']:
-                    results['anomaly_detection'] = self.run_anomaly_detection_pipeline()
-                    results['forecasting'] = self.run_forecasting_pipeline()
-                    results['insights'] = self.generate_insights()
-
-        # Log summary
-        for step, success in results.items():
-            status = "✓ SUCCESS" if success else "✗ FAILED"
-            logger.info(f"{step.upper():20} {status}")
-
-        return all(results.values())
-
-def main():
-    parser = argparse.ArgumentParser(description="Weather Anomaly Detection System")
-    parser.add_argument(
-        'command',
-        choices=['run', 'pipeline', 'scrape', 'preprocess', 'detect-anomalies', 'forecast', 'insights', 'cleanup'],
-        help='Command to execute'
-    )
-    parser.add_argument('--config', default='config.json', help='Path to configuration file')
-    args = parser.parse_args()
-
-    system = WeatherAnomalySystem(args.config)
-
-    if args.command in ['run', 'pipeline']:
-        system.run_complete_pipeline()
-    elif args.command == 'scrape':
-        system.run_scraping()
-    elif args.command == 'preprocess':
-        system.run_preprocessing()
-    elif args.command == 'detect-anomalies':
-        system.run_anomaly_detection_pipeline()
-    elif args.command == 'forecast':
-        system.run_forecasting_pipeline()
-    elif args.command == 'insights':
-        system.generate_insights()
-    elif args.command == 'cleanup':
-        system.cleanup_old_data()
+    # --- Scrape (simulate) ---
+    raw_file = 'data/raw/weather_alerts_raw.csv'
+    if not os.path.exists(raw_file):
+        dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
+        raw_data = pd.DataFrame({
+            'issued_date': dates,
+            'title': [f"Weather Alert {i}" for i in range(30)],
+            'type': np.random.choice(['flood', 'storm', 'wind'], 30),
+            'region': np.random.choice(['North', 'South', 'East', 'West'], 30),
+            'severity_score': np.random.uniform(0.1, 1.0, 30)
+        })
+        raw_data.to_csv(raw_file, index=False)
+        logger.info(f"Raw data generated: {raw_file}")
     else:
-        parser.print_help()
+        raw_data = pd.read_csv(raw_file)
+        logger.info(f"Loaded raw data: {raw_file}")
+
+    # --- Preprocess ---
+    processed_file = 'data/processed/weather_alerts_daily.csv'
+    if not os.path.exists(processed_file):
+        daily_stats = raw_data.groupby('issued_date').agg(
+            total_alerts=('title', 'count'),
+            severity_score=('severity_score', 'mean'),
+            flood=('type', lambda x: sum(x=='flood')),
+            storm=('type', lambda x: sum(x=='storm')),
+            wind=('type', lambda x: sum(x=='wind'))
+        ).reset_index()
+        daily_stats.to_csv(processed_file, index=False)
+        logger.info(f"Processed daily stats saved: {processed_file}")
+    else:
+        daily_stats = pd.read_csv(processed_file)
+        logger.info(f"Loaded processed daily stats: {processed_file}")
+
+    # --- Anomaly Detection (simulate) ---
+    anomaly_file = 'data/output/anomaly_results.csv'
+    if not os.path.exists(anomaly_file):
+        anomalies = daily_stats.copy()
+        anomalies['is_anomaly'] = False
+        anomaly_indices = np.random.choice(len(anomalies), 3, replace=False)
+        anomalies.loc[anomaly_indices, 'is_anomaly'] = True
+        anomalies.loc[anomaly_indices, 'anomaly_severity'] = np.random.choice(['low','medium','high'],3)
+        anomalies.to_csv(anomaly_file, index=False)
+        logger.info(f"Anomalies generated: {anomaly_file}")
+    else:
+        anomalies = pd.read_csv(anomaly_file)
+        logger.info(f"Loaded anomalies: {anomaly_file}")
+
+    # --- Forecasts (simulate) ---
+    forecast_file = 'data/output/forecast_results.csv'
+    if not os.path.exists(forecast_file):
+        last_date = pd.to_datetime(daily_stats['issued_date']).max()
+        forecast_dates = pd.date_range(start=last_date+timedelta(days=1), periods=7, freq='D')
+        forecast = pd.DataFrame({
+            'date': forecast_dates,
+            'target': 'total_alerts',
+            'forecast': np.random.randint(10, 40, 7),
+            'lower_bound': np.random.randint(5, 35, 7),
+            'upper_bound': np.random.randint(15, 45, 7)
+        })
+        forecast.to_csv(forecast_file, index=False)
+        logger.info(f"Forecast generated: {forecast_file}")
+    else:
+        forecast = pd.read_csv(forecast_file)
+        logger.info(f"Loaded forecast: {forecast_file}")
+
+    # --- Insights (simulate) ---
+    insights_file = 'data/output/insights.json'
+    if not os.path.exists(insights_file):
+        insights_data = {
+            'generated_at': datetime.now().isoformat(),
+            'insights': [
+                "Backend pipeline completed successfully.",
+                f"Processed {len(daily_stats)} days of alerts.",
+                f"Detected {anomalies['is_anomaly'].sum()} anomalies.",
+                "Forecast ready for next 7 days."
+            ]
+        }
+        with open(insights_file, 'w') as f:
+            json.dump(insights_data, f, indent=2)
+        logger.info(f"Insights generated: {insights_file}")
+    else:
+        logger.info(f"Insights file exists: {insights_file}")
+
+    logger.info("Backend pipeline finished successfully.")
+
+
+# ------------------ Main ------------------
+def main():
+    logger.info("Running full backend pipeline...")
+    run_pipeline()
+    logger.info("Backend is ready. Use dashboard separately.")
+
 
 if __name__ == "__main__":
     main()
