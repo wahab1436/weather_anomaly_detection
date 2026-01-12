@@ -35,7 +35,6 @@ class WeatherAnomalySystem:
     """Main orchestration class for the weather anomaly detection system."""
     
     def __init__(self, config_path: str = None):
-        """Initialize the system with configuration."""
         self.config = self.load_config(config_path)
         self.running = False
         
@@ -48,25 +47,25 @@ class WeatherAnomalySystem:
         self.anomaly_output_path = "data/output/anomaly_results.csv"
         self.forecast_output_path = "data/output/forecast_results.csv"
 
-    # ---------- Methods (same as your existing code) ----------
-    # load_config, run_scraping, run_preprocessing, run_anomaly_detection_pipeline,
-    # run_forecasting_pipeline, generate_insights, run_complete_pipeline,
-    # cleanup_old_data, schedule_jobs, run_scheduler remain unchanged.
-    # ------------------------------
+    # ----------------------------
+    # Existing methods here
+    # (run_scraping, run_preprocessing, run_anomaly_detection_pipeline,
+    #  run_forecasting_pipeline, generate_insights, run_complete_pipeline,
+    #  cleanup_old_data, schedule_jobs, run_scheduler)
+    # ----------------------------
 
     def start_dashboard(self):
         """Start the Streamlit dashboard."""
-        if not self.config['enable_dashboard']:
+        if not self.config.get('enable_dashboard', True):
             logger.info("Dashboard disabled in configuration")
             return
         
-        logger.info(f"Starting dashboard on port {self.config['dashboard_port']}...")
+        logger.info(f"Starting dashboard on port {self.config.get('dashboard_port', 8501)}...")
         
-        # Run Streamlit dashboard from this main entry point
         import subprocess
         subprocess.run([
             sys.executable, "-m", "streamlit", "run", "src/dashboard/app.py",
-            "--server.port", str(self.config['dashboard_port'])
+            "--server.port", str(self.config.get('dashboard_port', 8501))
         ])
 
 # ------------------------------
@@ -75,13 +74,16 @@ class WeatherAnomalySystem:
 def main():
     """Main entry point for the system."""
 
-    # Detect if Streamlit is running
-    if 'streamlit' in sys.argv[0].lower():
+    # ----------------------------
+    # DEPLOYMENT/STREAMLIT SAFE LOGIC
+    # ----------------------------
+    # If no CLI arguments are provided, or Streamlit is running, start dashboard
+    if len(sys.argv) == 1 or 'streamlit' in sys.argv[0].lower():
         system = WeatherAnomalySystem()
         system.start_dashboard()
         return
 
-    # ---------- CLI argument parsing ----------
+    # ---------- Normal CLI parsing ----------
     import argparse
     
     parser = argparse.ArgumentParser(
@@ -126,34 +128,23 @@ Examples:
     # Initialize system
     system = WeatherAnomalySystem(args.config)
 
-    # Execute command
-    if args.command in ['run', 'pipeline']:
-        system.run_complete_pipeline()
-    
-    elif args.command == 'scheduler':
-        system.run_scheduler()
-    
-    elif args.command == 'scrape':
-        system.run_scraping()
-    
-    elif args.command == 'preprocess':
-        system.run_preprocessing()
-    
-    elif args.command == 'detect-anomalies':
-        system.run_anomaly_detection_pipeline()
-    
-    elif args.command == 'forecast':
-        system.run_forecasting_pipeline()
-    
-    elif args.command == 'dashboard':
-        system.start_dashboard()
-    
-    elif args.command == 'cleanup':
-        system.cleanup_old_data()
-    
-    elif args.command == 'insights':
-        system.generate_insights()
-    
+    # Execute command mapping
+    command_map = {
+        'run': system.run_complete_pipeline,
+        'pipeline': system.run_complete_pipeline,
+        'scheduler': system.run_scheduler,
+        'scrape': system.run_scraping,
+        'preprocess': system.run_preprocessing,
+        'detect-anomalies': system.run_anomaly_detection_pipeline,
+        'forecast': system.run_forecasting_pipeline,
+        'dashboard': system.start_dashboard,
+        'cleanup': system.cleanup_old_data,
+        'insights': system.generate_insights
+    }
+
+    func = command_map.get(args.command)
+    if func:
+        func()
     else:
         parser.print_help()
 
